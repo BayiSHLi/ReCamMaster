@@ -4,5 +4,5 @@ Wan-AI
 *.json
 /results
 /models
-/camera_visualization
+/camera_visualizations
 /ckpts
