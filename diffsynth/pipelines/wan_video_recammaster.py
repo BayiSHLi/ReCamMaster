@@ -274,7 +274,8 @@ class WanVideoReCamMasterPipeline(BasePipeline):
         tgt_latent_length = latents.shape[2]
         for progress_id, timestep in enumerate(progress_bar_cmd(self.scheduler.timesteps)):
             timestep = timestep.unsqueeze(0).to(dtype=self.torch_dtype, device=self.device)
-
+            
+            # Concatenate source latents and target latents at the frames dimension
             latents_input = torch.cat([latents, source_latents], dim=2)
             # Inference
             noise_pred_posi = model_fn_wan_video(self.dit, latents_input, timestep=timestep, cam_emb=cam_emb, **prompt_emb_posi, **image_emb, **extra_input, **tea_cache_posi)

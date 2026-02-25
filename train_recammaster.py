@@ -225,6 +225,9 @@ class TensorDataset(torch.utils.data.Dataset):
                     cond_idx = random.randint(1, 10)
                 path_cond = re.sub(r'cam(\d+)', f'cam{cond_idx:02}', path_tgt)
                 data_cond = torch.load(path_cond, weights_only=True, map_location="cpu")
+                # Concatenate the target latent and the condition latent at the frames dimension
+                # First part target, second part condition.
+                # Here is how the Frame Dimension Condiitonig Realize in the original paper.
                 data['latents'] = torch.cat((data_tgt['latents'],data_cond['latents']),dim=1)
                 data['prompt_emb'] = data_tgt['prompt_emb']
                 data['image_emb'] = {}
@@ -299,6 +302,7 @@ class LightningModelForTrain(pl.LightningModule):
             state_dict = torch.load(resume_ckpt_path, map_location="cpu")
             self.pipe.dit.load_state_dict(state_dict, strict=True)
 
+        # Freeze parameters except cam_encoder, projector and self_attn in DiT
         self.freeze_parameters()
         for name, module in self.pipe.denoising_model().named_modules():
             if any(keyword in name for keyword in ["cam_encoder", "projector", "self_attn"]):
@@ -306,6 +310,7 @@ class LightningModelForTrain(pl.LightningModule):
                 for param in module.parameters():
                     param.requires_grad = True
 
+        # Count trainable parameters
         trainable_params = 0
         seen_params = set()
         for name, module in self.pipe.denoising_model().named_modules():
@@ -329,7 +334,7 @@ class LightningModelForTrain(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # Data
-        latents = batch["latents"].to(self.device)
+        latents = batch["latents"].to(self.device) # VAE latent
         prompt_emb = batch["prompt_emb"]
         prompt_emb["context"] = prompt_emb["context"][0].to(self.device)
         image_emb = batch["image_emb"]
@@ -350,6 +355,10 @@ class LightningModelForTrain(pl.LightningModule):
         origin_latents = copy.deepcopy(latents)
         noisy_latents = self.pipe.scheduler.add_noise(latents, noise, timestep)
         tgt_latent_len = noisy_latents.shape[2] // 2
+        # The latent is the concatenation of the condition latent and the target latent.
+        # The target latent is at the first half and the condition latent is at the second half.
+        # During training, we only add noise to the target latent and keep the condition latent clean.
+        # Here we replace the second half of the noisy latent with the origin latent.
         noisy_latents[:, :, tgt_latent_len:, ...] = origin_latents[:, :, tgt_latent_len:, ...]
         training_target = self.pipe.scheduler.training_target(latents, noise, timestep)
         

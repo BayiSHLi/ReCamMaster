@@ -264,6 +264,8 @@ MultiCamVideo-Dataset
 ### 3. Useful scripts
 - Data Extraction
 ```bash
+# Check the integrity of the downloaded file
+cat MultiCamVideo-Dataset.part* | pv | gzip -t
 cat MultiCamVideo-Dataset.part* > MultiCamVideo-Dataset.tar.gz
 tar -xzvf MultiCamVideo-Dataset.tar.gz
 ```
