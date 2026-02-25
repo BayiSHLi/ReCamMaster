@@ -143,7 +143,11 @@ if __name__ == "__main__":
     # 1. 加载模型
     # =========================
     model_id = args.model_id
-
+    # 首次运行会自动下载模型权重，后续会缓存到本地
+    print("Downloading model once in main process...")
+    VideoLlavaProcessor.from_pretrained(model_id)
+    VideoLlavaForConditionalGeneration.from_pretrained(model_id)
+    
     root_dir = Path(args.root_dir)
 
     if args.split_json:
