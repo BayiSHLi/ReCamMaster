@@ -6,3 +6,4 @@ Wan-AI
 /models
 /camera_visualizations
 /ckpts
+*.log
