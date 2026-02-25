@@ -150,8 +150,10 @@ if __name__ == "__main__":
         with open(args.split_json, "r") as f:
             mp4_files = json.load(f)
         mp4_files = [Path(p) for p in mp4_files]
+        output_csv = Path(args.output_csv).parent / f"metadata_{Path(args.split_json).stem}.csv"
     else:
         mp4_files = sorted(list(root_dir.rglob("*.mp4")))
+        output_csv = Path(args.output_csv) 
 
     total_videos = len(mp4_files)
     print(f"Total mp4 files: {total_videos}")
@@ -163,8 +165,6 @@ if __name__ == "__main__":
 
     for f in mp4_files:
         task_queue.put(f)
-
-    output_csv = Path(args.output_csv) 
 
     num_gpus = torch.cuda.device_count()
     print(f"Detected {num_gpus} GPUs")

@@ -1,0 +1,1 @@
+nohup python llava_video_caption.py --split_json ./split_A.json > caption.log 2>&1 &
