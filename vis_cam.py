@@ -64,13 +64,17 @@ def get_args():
     parser.add_argument('--total_frame', type=int, default=81)
     parser.add_argument('--stride', type=int, default=4)
     parser.add_argument('--cam_idx', type=str, default="05")
+    parser.add_argument('--cam_start', type=int, default=1, help='start camera index (inclusive)')
+    parser.add_argument('--cam_end', type=int, default=10, help='end camera index (inclusive)')
+    parser.add_argument('--out_dir', type=str, default='./camera_visualizations',
+                        help='directory where visualizations will be saved')
     parser.add_argument('--base_xval', type=float, default=0.08)
     parser.add_argument('--zval', type=float, default=0.15)
-    parser.add_argument('--x_min', type=float, default=-2)
-    parser.add_argument('--x_max', type=float, default=2)
-    parser.add_argument('--y_min', type=float, default=-2)
-    parser.add_argument('--y_max', type=float, default=2)
-    parser.add_argument('--z_min', type=float, default=-1.)
+    parser.add_argument('--x_min', type=float, default=-1)
+    parser.add_argument('--x_max', type=float, default=1)
+    parser.add_argument('--y_min', type=float, default=-1)
+    parser.add_argument('--y_max', type=float, default=1)
+    parser.add_argument('--z_min', type=float, default=-1)
     parser.add_argument('--z_max', type=float, default=1)
     return parser.parse_args()
 
@@ -103,28 +107,42 @@ def parse_matrix(matrix_str):
 if __name__ == '__main__':
     args = get_args()
 
+    # ensure output directory exists
+    import os
+    os.makedirs(args.out_dir, exist_ok=True)
+
     with open(args.pose_file_path, 'r') as file:
         data = json.load(file)
-    cameras = [parse_matrix(data[f"frame{i}"][f"cam{args.cam_idx}"]) for i in range(0, args.total_frame, args.stride)]
-    cameras = np.transpose(np.stack(cameras), (0, 2, 1))
 
-    w2cs = []
-    for cam in cameras:
-        if cam.shape[0] == 3:
-            cam = np.vstack((cam, np.array([[0, 0, 0, 1]])))
-        cam = cam[:, [1, 2, 0, 3]]
-        cam[:3, 1] *= -1.
-        w2cs.append(np.linalg.inv(cam))
-    transform_matrix = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
-    c2ws = get_c2w(w2cs, transform_matrix, True)
-    scale = max(max(abs(c2w[:3, 3])) for c2w in c2ws)
-    if scale > 1e-3:  # otherwise, pan or tilt
-        for c2w in c2ws:
-            c2w[:3, 3] /= scale
+    # iterate through requested camera indices
+    for cam_num in range(args.cam_start, args.cam_end + 1):
+        cam_idx = f"{cam_num:02d}"
+        cameras = [parse_matrix(data[f"frame{i}"][f"cam{cam_idx}"]) for i in range(0, args.total_frame, args.stride)]
+        cameras = np.transpose(np.stack(cameras), (0, 2, 1))
 
-    visualizer = CameraPoseVisualizer([args.x_min, args.x_max], [args.y_min, args.y_max], [args.z_min, args.z_max])
-    for frame_idx, c2w in enumerate(c2ws):
-        visualizer.extrinsic2pyramid(c2w, frame_idx / len(cameras), hw_ratio=args.hw_ratio, base_xval=args.base_xval,
-                                     zval=(args.zval))
-    visualizer.colorbar(len(cameras))
-    visualizer.show()
+        w2cs = []
+        for cam in cameras:
+            if cam.shape[0] == 3:
+                cam = np.vstack((cam, np.array([[0, 0, 0, 1]])))
+            cam = cam[:, [1, 2, 0, 3]]
+            cam[:3, 1] *= -1.
+            w2cs.append(np.linalg.inv(cam))
+        transform_matrix = np.array([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
+        c2ws = get_c2w(w2cs, transform_matrix, True)
+        scale = max(max(abs(c2w[:3, 3])) for c2w in c2ws)
+        if scale > 1e-3:  # otherwise, pan or tilt
+            for c2w in c2ws:
+                c2w[:3, 3] /= scale
+
+        # create a fresh visualizer per camera
+        visualizer = CameraPoseVisualizer([args.x_min, args.x_max], [args.y_min, args.y_max], [args.z_min, args.z_max])
+        for frame_idx, c2w in enumerate(c2ws):
+            visualizer.extrinsic2pyramid(c2w, frame_idx / len(cameras), hw_ratio=args.hw_ratio, base_xval=args.base_xval,
+                                         zval=(args.zval))
+        visualizer.colorbar(len(cameras))
+        # update title with camera number
+        plt.title(f'Extrinsic Parameters - Camera {cam_idx}')
+        out_path = os.path.join(args.out_dir, f'extrinsic_parameters_cam{cam_idx}.jpg')
+        plt.savefig(out_path, format='jpg', dpi=300)
+        print(f'saved visualization for camera {cam_idx} to {out_path}')
+        plt.close(visualizer.fig)

@@ -184,7 +184,7 @@ def parse_args():
     parser.add_argument(
         "--cam_type",
         type=str,
-        default=1,
+        default=5,
     )
     parser.add_argument(
         "--cfg_scale",

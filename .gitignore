@@ -1,3 +1,6 @@
 *__pycache__
 *.ckpt
 Wan-AI
+*.json
+/results
+/models
