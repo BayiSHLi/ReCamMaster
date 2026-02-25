@@ -9,6 +9,7 @@ import csv
 import json
 import sys
 import argparse
+from huggingface_hub import snapshot_download
 
 
 def read_video_pyav(container, indices):
@@ -55,10 +56,14 @@ def gpu_worker(gpu_id, task_queue, result_queue, model_id, batch_size=4):
     device = f"cuda:{gpu_id}"
     print(f"[Process {gpu_id}] Loading model on {device}")
 
-    processor = VideoLlavaProcessor.from_pretrained(model_id)
+    processor = VideoLlavaProcessor.from_pretrained(
+        model_id,
+        local_files_only=True
+        )
     model = VideoLlavaForConditionalGeneration.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
+        local_files_only=True,
     ).to(device)
 
     processor.patch_size = model.config.vision_config.patch_size
@@ -144,9 +149,13 @@ if __name__ == "__main__":
     # =========================
     model_id = args.model_id
     # 首次运行会自动下载模型权重，后续会缓存到本地
-    print("Downloading model once in main process...")
-    VideoLlavaProcessor.from_pretrained(model_id)
-    VideoLlavaForConditionalGeneration.from_pretrained(model_id)
+    print("Checking local model cache...")
+
+    local_model_path = snapshot_download(
+        repo_id=model_id,
+        local_files_only=False,  # 如果没有就下载
+    )
+    print(f"Model ready at: {local_model_path}")
     
     root_dir = Path(args.root_dir)
 
