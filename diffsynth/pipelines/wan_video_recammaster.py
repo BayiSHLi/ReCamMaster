@@ -366,6 +366,7 @@ def model_fn_wan_video(
     t_mod = dit.time_projection(t).unflatten(1, (6, dit.dim))
     context = dit.text_embedding(context)
     
+    # if there are image inputs, concatenate them to the channel dimension of x
     if dit.has_image_input:
         x = torch.cat([x, y], dim=1)  # (b, c_x + c_y, f, h, w)
         clip_embdding = dit.img_emb(clip_feature)

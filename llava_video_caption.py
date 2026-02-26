@@ -42,11 +42,11 @@ def read_video(video_path):
     Returns:
         result (np.ndarray): np array of decoded frames of shape (num_frames, height, width, 3).
     '''
-    container = av.open(video_path)
-    total_frames = container.streams.video[0].frames
-    indices = np.arange(0, total_frames, total_frames / 8).astype(int)
-    return read_video_pyav(container, indices)
-
+    with av.open(video_path) as container:
+        total_frames = container.streams.video[0].frames
+        indices = np.arange(0, total_frames, total_frames / 8).astype(int)
+        video = read_video_pyav(container, indices)
+    return video
 
 # =========================
 # GPU Worker
@@ -156,7 +156,7 @@ if __name__ == "__main__":
         local_files_only=False,  # 如果没有就下载
     )
     print(f"Model ready at: {local_model_path}")
-    
+
     root_dir = Path(args.root_dir)
 
     if args.split_json:
