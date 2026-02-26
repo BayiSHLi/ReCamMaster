@@ -56,6 +56,7 @@ def merge_split_csvs(root_dir, csv_list):
     with open(combined_csv, "w", encoding="utf-8") as f:
         f.writelines(combined_lines)
     print(f"已合并 CSV 文件，保存为 {combined_csv}")
+    return combined_csv
 
 
 def resume_unfinished_video(json_path, metadata_csv_path):
@@ -79,8 +80,36 @@ def resume_unfinished_video(json_path, metadata_csv_path):
                  split_id=["C", "D"], ratio=0.5)
 
 
+def verify_all_video_processed(root_dir, csv_path):
+    mp4_files = sorted(list(root_dir.rglob("*.mp4")))
+
+    print(f"Total videos in {root_dir}: {len(mp4_files)}")
+
+    df = pd.read_csv(csv_path)
+    completed_paths = set(p.strip() for p in df.iloc[:, 0].astype(str))
+    print(f"Completed paths: {len(completed_paths)}")
+
+    unfinished_paths = list(mp4_files - completed_paths)
+    print(f"Unfinished videos: {len(unfinished_paths)}")
+
+    if len(unfinished_paths) == 0:
+        print("✅ All videos are completed!")
+        return None
+    else:
+        print("❌ Some videos are still unfinished: saved in new split")
+        json_path = Path("./split_unfinished.json")
+        with open(json_path, "w") as f:
+            json.dump([str(p) for p in unfinished_paths], f, indent=2)
+        print(f"Unfinished video paths saved to {json_path}")
+        return json_path
+
+
 if __name__ == "__main__":
     root_dir = Path("/mnt/hdd/dataset/MultiCamVideo-Dataset")
-    metadata_csv_path = root_dir / "metadata_split_B.csv"
-    # Resume the unfinished video of split_B
-    resume_unfinished_video(json_path="./split_B.json", metadata_csv_path=metadata_csv_path)
+    # metadata_csv_path = root_dir / "metadata_split_B.csv"
+    # # Resume the unfinished video of split_B
+    # resume_unfinished_video(json_path="./split_B.json", metadata_csv_path=metadata_csv_path)
+    csv_list = ["metadata_split_A.csv", "metadata_split_B.csv", "metadata_split_C.csv", "metadata_split_D.csv"]
+    combined_csv = merge_split_csvs(root_dir, csv_list)
+    # Verify all videos are processed
+    verify_all_video_processed(root_dir, combined_csv)
