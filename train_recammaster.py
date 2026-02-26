@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import shutil
 from pytorch_lightning.callbacks import TQDMProgressBar
-# from decord import VideoReader, cpu
+import av
 
 class TextVideoDataset(torch.utils.data.Dataset):
     def __init__(self, base_path, metadata_path, max_num_frames=81, frame_interval=1, num_frames=81, height=480, width=832, is_i2v=False):
@@ -77,9 +77,92 @@ class TextVideoDataset(torch.utils.data.Dataset):
             return frames
 
 
+    def load_frames_using_pyav(
+        self,
+        file_path,
+        max_num_frames,
+        start_frame_id,
+        interval,
+        num_frames,
+        frame_process
+    ):
+        try:
+            container = av.open(file_path)
+        except Exception as e:
+            print(f"[Decode Error] {file_path}: {e}")
+            return None
+
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+
+        total_frames = stream.frames
+
+        # 某些编码格式可能为 0
+        if total_frames == 0 and stream.duration is not None:
+            total_frames = int(stream.duration * stream.average_rate)
+
+        if (
+            total_frames is None
+            or total_frames < max_num_frames
+            or total_frames - 1 < start_frame_id + (num_frames - 1) * interval
+        ):
+            container.close()
+            return None
+    
+        target_ids = [
+            start_frame_id + i * interval
+            for i in range(num_frames)
+        ]
+        target_ptr = 0
+        max_target_id = target_ids[-1]
+
+        frames = []
+        first_frame = None
+        current_id = 0
+
+        for frame in container.decode(stream):
+
+            if current_id > max_target_id:
+                break
+
+            if current_id == target_ids[target_ptr]:
+
+                img = frame.to_rgb().to_ndarray()
+                img = Image.fromarray(img)
+
+                img = self.crop_and_resize(img)
+
+                if first_frame is None:
+                    first_frame = np.array(img)
+
+                img = frame_process(img)
+                frames.append(img)
+
+                target_ptr += 1
+
+                if target_ptr == len(target_ids):
+                    break
+
+            current_id += 1
+
+        container.close()
+
+        if len(frames) != num_frames:
+            return None
+
+        frames = torch.stack(frames, dim=0)
+        frames = rearrange(frames, "T C H W -> C T H W")
+
+        if self.is_i2v:
+            return frames, first_frame
+        else:
+            return frames
+        
+
     def load_video(self, file_path):
         start_frame_id = 0
-        frames = self.load_frames_using_imageio(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
+        # frames = self.load_frames_using_imageio(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
+        frames = self.load_frames_using_pyav(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
         return frames
     
     
