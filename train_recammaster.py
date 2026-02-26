@@ -630,7 +630,7 @@ def data_process(args):
     dataloader = torch.utils.data.DataLoader(
         dataset,
         shuffle=False,
-        batch_size=4,
+        batch_size=8,
         num_workers=args.dataloader_num_workers
     )
     model = LightningModelForDataProcess(
