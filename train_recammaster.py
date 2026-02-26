@@ -232,7 +232,8 @@ class LightningModelForDataProcess(pl.LightningModule):
                 # prompt
                 prompt_emb = self.pipe.encode_prompt(text)
                 # video
-                video = video.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)
+                video = video.to(self.pipe.device, non_blocking=True)
+                video = video.to(self.pipe.torch_dtype)
                 latents = self.pipe.encode_video(video, **self.tiler_kwargs)[0]
                 # image
                 if "first_frame" in batch:
