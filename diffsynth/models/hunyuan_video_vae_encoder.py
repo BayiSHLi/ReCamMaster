@@ -252,7 +252,7 @@ class HunyuanVideoVAEEncoder(nn.Module):
         weight = torch.zeros((1, 1,  (T - 1) // 4 + 1, H // 8, W // 8), dtype=torch_dtype, device=data_device)
         values = torch.zeros((B, 16, (T - 1) // 4 + 1, H // 8, W // 8), dtype=torch_dtype, device=data_device)
 
-        for t, t_, h, h_, w, w_ in tqdm(tasks, desc="VAE encoding"):
+        for t, t_, h, h_, w, w_ in tqdm(tasks, desc="VAE encoding", disable=True):
             hidden_states_batch = hidden_states[:, :, t:t_, h:h_, w:w_].to(computation_device)
             hidden_states_batch = self.forward(hidden_states_batch).to(data_device)
             if t > 0:

@@ -4,6 +4,27 @@ import random
 import pandas as pd
 
 
+def split_metadata(root_dir, metadata_csv_path, split_ratio=0.5, split_id=["ws1", "ws2"]):
+    df = pd.read_csv(root_dir / metadata_csv_path)
+    total_videos = len(df)
+    print(f"Total videos in metadata: {total_videos}")
+
+    # 打乱数据
+    df_shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    split_index = int(total_videos * split_ratio)
+
+    split_1 = df_shuffled.iloc[:split_index]
+    split_2 = df_shuffled.iloc[split_index:]
+
+    print(f"{split_id[0]}: {len(split_1)} videos")
+    print(f"{split_id[1]}: {len(split_2)} videos")
+
+    split_1.to_csv(root_dir / f"metadata_split_{split_id[0]}.csv", index=False)
+    split_2.to_csv(root_dir / f"metadata_split_{split_id[1]}.csv", index=False)
+
+
+
 def split_videos(
         root_dir, 
         file_list, 
@@ -184,12 +205,17 @@ def post_process(metadata_path, root_dir):
 
 if __name__ == "__main__":
     root_dir = Path("/mnt/hdd/dataset/MultiCamVideo-Dataset")
+
     # metadata_csv_path = root_dir / "metadata_split_B.csv"
     # # Resume the unfinished video of split_B
     # resume_unfinished_video(json_path="./split_B.json", metadata_csv_path=metadata_csv_path)
-    csv_list = ["metadata_split_A.csv", "metadata_split_B.csv", "metadata_split_C.csv", "metadata_split_D.csv"]
-    combined_csv = merge_split_csvs(root_dir, csv_list)
-    # Verify all videos are processed
-    verify_all_video_processed(root_dir, combined_csv)
 
-    train_csv_path, val_csv_path = post_process(combined_csv, root_dir)
+    # csv_list = ["metadata_split_A.csv", "metadata_split_B.csv", "metadata_split_C.csv", "metadata_split_D.csv"]
+    # combined_csv = merge_split_csvs(root_dir, csv_list)
+    # # Verify all videos are processed
+    # verify_all_video_processed(root_dir, combined_csv)
+
+    # train_csv_path, val_csv_path = post_process(combined_csv, root_dir)
+
+    metadata_csv_path = "metadata.csv"
+    split_metadata(root_dir, metadata_csv_path, split_ratio=0.5, split_id=["ws1", "ws2"])
