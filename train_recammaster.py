@@ -218,9 +218,10 @@ class LightningModelForDataProcess(pl.LightningModule):
         model_manager = ModelManager(torch_dtype=torch.bfloat16, device="cpu")
         model_manager.load_models(model_path)
         self.pipe = WanVideoReCamMasterPipeline.from_model_manager(model_manager)
+        self.pipe.vae = torch.compile(self.pipe.vae, mode="reduce-overhead")
 
         self.tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
-        
+    
     def test_step(self, batch, batch_idx):
         text, video, path = batch["text"][0], batch["video"], batch["path"][0]
         
@@ -231,7 +232,8 @@ class LightningModelForDataProcess(pl.LightningModule):
                 # prompt
                 prompt_emb = self.pipe.encode_prompt(text)
                 # video
-                video = video.to(dtype=self.pipe.torch_dtype, device=self.pipe.device)
+                video = video.to(self.pipe.device, non_blocking=True)
+                video = video.to(self.pipe.torch_dtype)
                 latents = self.pipe.encode_video(video, **self.tiler_kwargs)[0]
                 # image
                 if "first_frame" in batch:
