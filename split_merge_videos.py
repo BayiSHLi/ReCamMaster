@@ -86,7 +86,16 @@ def verify_all_video_processed(root_dir, csv_path):
     print(f"Total videos in {root_dir}: {len(mp4_files)}")
 
     df = pd.read_csv(csv_path)
-    completed_paths = set(p.strip() for p in df.iloc[:, 0].astype(str))
+    path_col = df.iloc[:, 0].astype(str).str.strip()
+    caption_col = df.iloc[:, 1]
+
+    invalid_values = {"", "none", "nan", "error", "failed"}
+
+    valid_mask = (
+        caption_col.notna()
+        & (~caption_col.astype(str).str.strip().str.lower().isin(invalid_values))
+    )
+    completed_paths = set(path_col[valid_mask].tolist())
     print(f"Completed paths: {len(completed_paths)}")
 
     unfinished_paths = list(mp4_files - completed_paths)
