@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import shutil
 from pytorch_lightning.callbacks import TQDMProgressBar
-from decord import VideoReader, gpu
+# from decord import VideoReader, cpu
 
 class TextVideoDataset(torch.utils.data.Dataset):
     def __init__(self, base_path, metadata_path, max_num_frames=81, frame_interval=1, num_frames=81, height=480, width=832, is_i2v=False):
@@ -76,62 +76,10 @@ class TextVideoDataset(torch.utils.data.Dataset):
         else:
             return frames
 
-    def load_video_decord(
-        self,
-        file_path,
-        max_num_frames,
-        start_frame_id,
-        interval,
-        num_frames,
-        frame_process
-    ):
-        try:
-            vr = VideoReader(file_path, ctx=gpu(0))
-        except Exception as e:
-            print(f"[Decode Error] {file_path}: {e}")
-            raise RuntimeError(f"Failed to decode video: {file_path}")
-
-        total_frames = len(vr)
-
-        if total_frames - 1 < start_frame_id + (num_frames - 1) * interval:
-            return None
-
-        # === 计算要采样的帧索引 ===
-        frame_ids = [
-            start_frame_id + i * interval
-            for i in range(num_frames)
-        ]
-
-        # === 批量读取（这是 decord 加速的关键）===
-        try:
-            frames = vr.get_batch(frame_ids)  # 已在 GPU
-            frames = frames.to_dlpack()
-            frames = torch.utils.dlpack.from_dlpack(frames)
-        except Exception:
-            print(f"[Batch Decode Error] {file_path}, falling back to single-frame decoding.")
-            raise RuntimeError(f"Batch decoding failed for video: {file_path}")
-
-        frames = frames.permute(0, 3, 1, 2).float() / 255.0
-
-        frames = F.interpolate(
-            frames,
-            size=(self.target_h, self.target_w),
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        frames = rearrange(frames, "T C H W -> C T H W")
-
-        if self.is_i2v:
-            first_frame = frames[:, 0].clone()
-            return frames, first_frame
-        else:
-            return frames
 
     def load_video(self, file_path):
         start_frame_id = 0
-        # frames = self.load_frames_using_imageio(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
-        frames = self.load_video_decord(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
+        frames = self.load_frames_using_imageio(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
         return frames
     
     
