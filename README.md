@@ -274,6 +274,12 @@ tar -xzvf MultiCamVideo-Dataset.tar.gz
 python vis_cam.py
 ```
 
+### 4. Install decord cuda version to accelerate the vae process
+Follow the instruction form [decord-install](https://github.com/dmlc/decord?tab=readme-ov-file#installation).\
+Before install decord, make sure that cuda-toolkit is installed already.\
+`nvcc -V`
+
+
 The visualization script is modified from [CameraCtrl](https://github.com/hehao13/CameraCtrl/blob/main/tools/visualize_trajectory.py), thanks for their inspiring work.
 
 <p align="center">

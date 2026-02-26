@@ -87,8 +87,9 @@ class TextVideoDataset(torch.utils.data.Dataset):
     ):
         try:
             vr = VideoReader(file_path, ctx=gpu(0))
-        except Exception:
-            return None
+        except Exception as e:
+            print(f"[Decode Error] {file_path}: {e}")
+            raise RuntimeError(f"Failed to decode video: {file_path}")
 
         total_frames = len(vr)
 
@@ -107,7 +108,8 @@ class TextVideoDataset(torch.utils.data.Dataset):
             frames = frames.to_dlpack()
             frames = torch.utils.dlpack.from_dlpack(frames)
         except Exception:
-            return None
+            print(f"[Batch Decode Error] {file_path}, falling back to single-frame decoding.")
+            raise RuntimeError(f"Batch decoding failed for video: {file_path}")
 
         frames = frames.permute(0, 3, 1, 2).float() / 255.0
 
