@@ -42,6 +42,7 @@ def read_video(video_path):
     Returns:
         result (np.ndarray): np array of decoded frames of shape (num_frames, height, width, 3).
     '''
+    # Close the file if it is already open in the current process to avoid "Too many open files" error.
     with av.open(video_path) as container:
         total_frames = container.streams.video[0].frames
         indices = np.arange(0, total_frames, total_frames / 8).astype(int)

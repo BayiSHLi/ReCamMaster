@@ -81,7 +81,10 @@ def resume_unfinished_video(json_path, metadata_csv_path):
 
 
 def verify_all_video_processed(root_dir, csv_path):
-    mp4_files = sorted(list(root_dir.rglob("*.mp4")))
+    root_dir = Path(root_dir)
+    mp4_files = {
+        str(p.resolve()) for p in root_dir.rglob("*.mp4")
+    }
 
     print(f"Total videos in {root_dir}: {len(mp4_files)}")
 
@@ -95,7 +98,10 @@ def verify_all_video_processed(root_dir, csv_path):
         caption_col.notna()
         & (~caption_col.astype(str).str.strip().str.lower().isin(invalid_values))
     )
-    completed_paths = set(path_col[valid_mask].tolist())
+
+    completed_paths = {
+        str(Path(p).resolve()) for p in path_col[valid_mask]
+    }
     print(f"Completed paths: {len(completed_paths)}")
 
     unfinished_paths = list(mp4_files - completed_paths)
@@ -112,6 +118,69 @@ def verify_all_video_processed(root_dir, csv_path):
         print(f"Unfinished video paths saved to {json_path}")
         return json_path
 
+def post_process(metadata_path, root_dir):
+    # Split the metadata.csv file containing absolute paths into:
+    # - metadata_train.csv
+    # - metadata_val.csv
+    # And change the absolute paths to paths relative to train/ or val/.
+
+    metadata_path = Path(metadata_path)
+    root_dir = Path(root_dir)
+
+    train_dir = root_dir / "train"
+    val_dir = root_dir / "val"
+
+    df = pd.read_csv(metadata_path)
+
+    if df.shape[1] == 0:
+        raise ValueError("metadata.csv 为空")
+
+    # 默认第一列是 file_name
+    file_col = df.columns[0]
+
+    # 用 mask 方式分离
+    train_mask = []
+    val_mask = []
+    new_paths = []
+
+    for abs_path_str in df[file_col]:
+        abs_path = Path(abs_path_str).resolve()
+
+        if train_dir in abs_path.parents:
+            rel_path = abs_path.relative_to(train_dir)
+            train_mask.append(True)
+            val_mask.append(False)
+            new_paths.append(str(rel_path))
+
+        elif val_dir in abs_path.parents:
+            rel_path = abs_path.relative_to(val_dir)
+            train_mask.append(False)
+            val_mask.append(True)
+            new_paths.append(str(rel_path))
+
+        else:
+            train_mask.append(False)
+            val_mask.append(False)
+            new_paths.append(None)
+            print(f"⚠️ 跳过非法路径: {abs_path}")
+
+    # 更新路径列
+    df[file_col] = new_paths
+
+    # 过滤
+    df_train = df[train_mask].copy()
+    df_val = df[val_mask].copy()
+
+    # 保存（明确写 header=True）
+    train_csv_path = metadata_path.parent / "metadata_train.csv"
+    val_csv_path = metadata_path.parent / "metadata_val.csv"
+
+    df_train.to_csv(train_csv_path, index=False, header=True)
+    df_val.to_csv(val_csv_path, index=False, header=True)
+
+    print(f"✅ Train: {len(df_train)}")
+    print(f"✅ Val: {len(df_val)}")
+    return train_csv_path, val_csv_path
 
 if __name__ == "__main__":
     root_dir = Path("/mnt/hdd/dataset/MultiCamVideo-Dataset")
@@ -122,3 +191,5 @@ if __name__ == "__main__":
     combined_csv = merge_split_csvs(root_dir, csv_list)
     # Verify all videos are processed
     verify_all_video_processed(root_dir, combined_csv)
+
+    train_csv_path, val_csv_path = post_process(combined_csv, root_dir)
