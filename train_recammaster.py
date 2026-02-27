@@ -18,6 +18,8 @@ import shutil
 from pytorch_lightning.callbacks import TQDMProgressBar
 import av
 
+import cv2
+
 class TextVideoDataset(torch.utils.data.Dataset):
     def __init__(self, base_path, metadata_path, max_num_frames=81, frame_interval=1, num_frames=81, height=480, width=832, is_i2v=False):
         metadata = pd.read_csv(metadata_path)
@@ -49,6 +51,26 @@ class TextVideoDataset(torch.utils.data.Dataset):
         )
         return image
 
+
+    def crop_and_resize_np(self, img):
+        # img: numpy HWC uint8
+
+        h, w, _ = img.shape
+        scale = max(self.width / w, self.height / h)
+
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+        # center crop
+        start_x = (new_w - self.width) // 2
+        start_y = (new_h - self.height) // 2
+
+        img = img[start_y:start_y+self.height,
+                start_x:start_x+self.width]
+
+        return img
 
     def load_frames_using_imageio(self, file_path, max_num_frames, start_frame_id, interval, num_frames, frame_process):
         reader = imageio.get_reader(file_path)
@@ -125,23 +147,22 @@ class TextVideoDataset(torch.utils.data.Dataset):
             if current_id > max_target_id:
                 break
 
-            if current_id == target_ids[target_ptr]:
+            if current_id != target_ids[target_ptr]:
+                continue
+            
+            img = frame.to_ndarray(format="rgb24")
+            img = self.crop_and_resize_np(img)
 
-                img = frame.to_rgb().to_ndarray()
-                img = Image.fromarray(img)
+            if first_frame is None:
+                first_frame = np.array(img)
 
-                img = self.crop_and_resize(img)
+            img_tensor = torch.from_numpy(img) 
+            frames.append(img_tensor.permute(2, 0, 1)) # HWC -> CHW
 
-                if first_frame is None:
-                    first_frame = np.array(img)
+            target_ptr += 1
 
-                img = frame_process(img)
-                frames.append(img)
-
-                target_ptr += 1
-
-                if target_ptr == len(target_ids):
-                    break
+            if target_ptr == len(target_ids):
+                break
 
             current_id += 1
 
@@ -162,7 +183,7 @@ class TextVideoDataset(torch.utils.data.Dataset):
     def load_video(self, file_path):
         start_frame_id = 0
         # frames = self.load_frames_using_imageio(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
-        frames = self.load_frames_using_pyav(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
+        frames = self.load_frames_using_pyav(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, frame_process=None)
         return frames
     
     
@@ -233,7 +254,11 @@ class LightningModelForDataProcess(pl.LightningModule):
                 prompt_emb = self.pipe.encode_prompt(text)
                 # video
                 video = video.to(self.pipe.device, non_blocking=True)
-                video = video.to(self.pipe.torch_dtype)
+                if video.dtype == torch.uint8:
+                    video = video.to(self.pipe.torch_dtype)
+                    video = video * (1/127.5) - 1.0
+                else:
+                    video = video.to(self.pipe.torch_dtype)
                 latents = self.pipe.encode_video(video, **self.tiler_kwargs)[0]
                 # image
                 if "first_frame" in batch:
