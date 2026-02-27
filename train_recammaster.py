@@ -23,15 +23,13 @@ import cv2
 class TextVideoDataset(torch.utils.data.Dataset):
     def __init__(self, base_path, metadata_path, max_num_frames=81, frame_interval=1, num_frames=81, height=480, width=832, is_i2v=False):
         metadata = pd.read_csv(metadata_path)
-        self.path = []
-        self.text = []
-        for file_name in metadata["file_name"]:
-            file_path = os.path.join(base_path, "train", file_name)
-            pth_path = file_path + ".tensors.pth"
-            if os.path.exists(pth_path):
-                continue
-            self.path.append(file_path)
-            self.text.append(metadata[metadata["file_name"] == file_name]["text"].values[0])
+        # 过滤掉已存在的 .tensors.pth 文件
+        file_paths = [os.path.join(base_path, "train", f) for f in metadata["file_name"]]
+        mask = [not os.path.exists(p + ".tensors.pth") for p in file_paths]
+
+        filtered = metadata[mask].reset_index(drop=True)
+        self.path = [file_paths[i] for i, m in enumerate(mask) if m]
+        self.text = filtered["text"].to_list()
 
         # self.path = [os.path.join(base_path, "train", file_name) for file_name in metadata["file_name"]]
         # self.text = metadata["text"].to_list()
