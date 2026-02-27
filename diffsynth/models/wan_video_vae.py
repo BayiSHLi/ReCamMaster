@@ -754,6 +754,18 @@ class WanVideoVAE(nn.Module):
         video = self.model.decode(hidden_state, self.scale)
         return video.clamp_(-1, 1)
 
+    def batch_encode(self, videos, device):
+        """
+        videos: list of (C, T, H, W) tensors, or a single (B, C, T, H, W) tensor
+        returns: (B, 16, T', H', W') tensor
+        """
+        if isinstance(videos, list):
+            videos = torch.stack(videos, dim=0)  # B C T H W
+        else:
+            videos = videos  # already B C T H W
+        videos = videos.to(device)
+        hidden_states = self.model.encode(videos, self.scale)
+        return hidden_states
 
     def encode(self, videos, device, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
 

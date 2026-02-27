@@ -1,240 +1,19 @@
 import copy
 import os
 import re
-import torch, os, imageio, argparse
-from torchvision.transforms import v2
+import torch, os, argparse
 from einops import rearrange
 import lightning as pl
 import pandas as pd
-from diffsynth import WanVideoReCamMasterPipeline, ModelManager, load_state_dict
-import torchvision
-from PIL import Image
+from diffsynth import WanVideoReCamMasterPipeline, ModelManager
 import numpy as np
 import random
 import json
 import torch.nn as nn
-import torch.nn.functional as F
-import shutil
 from pytorch_lightning.callbacks import TQDMProgressBar
-import av
-
-import cv2
-
-class TextVideoDataset(torch.utils.data.Dataset):
-    def __init__(self, base_path, metadata_path, max_num_frames=81, frame_interval=1, num_frames=81, height=480, width=832, is_i2v=False):
-        metadata = pd.read_csv(metadata_path)
-        # 过滤掉已存在的 .tensors.pth 文件
-        file_paths = [os.path.join(base_path, "train", f) for f in metadata["file_name"]]
-        mask = [not os.path.exists(p + ".tensors.pth") for p in file_paths]
-
-        filtered = metadata[mask].reset_index(drop=True)
-        self.path = [file_paths[i] for i, m in enumerate(mask) if m]
-        self.text = filtered["text"].to_list()
-
-        # self.path = [os.path.join(base_path, "train", file_name) for file_name in metadata["file_name"]]
-        # self.text = metadata["text"].to_list()
-        
-        self.max_num_frames = max_num_frames
-        self.frame_interval = frame_interval
-        self.num_frames = num_frames
-        self.height = height
-        self.width = width
-        self.is_i2v = is_i2v
-
-
-    def crop_and_resize_np(self, img):
-        # img: numpy HWC uint8
-
-        h, w, _ = img.shape
-        scale = max(self.width / w, self.height / h)
-
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-
-        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-
-        # center crop
-        start_x = (new_w - self.width) // 2
-        start_y = (new_h - self.height) // 2
-
-        img = img[start_y:start_y+self.height,
-                start_x:start_x+self.width]
-
-        return img
-
-
-    def load_frames_using_pyav(
-        self,
-        file_path,
-        max_num_frames,
-        start_frame_id,
-        interval,
-        num_frames,
-    ):
-        try:
-            container = av.open(file_path)
-        except Exception as e:
-            print(f"[Decode Error] {file_path}: {e}")
-            return None
-
-        stream = container.streams.video[0]
-        stream.thread_type = "AUTO"
-
-        total_frames = stream.frames
-
-        # 某些编码格式可能为 0
-        if total_frames == 0 and stream.duration is not None:
-            total_frames = int(stream.duration * stream.average_rate)
-
-        if (
-            total_frames is None
-            or total_frames < max_num_frames
-            or total_frames - 1 < start_frame_id + (num_frames - 1) * interval
-        ):
-            container.close()
-            return None
-    
-        target_ids = [
-            start_frame_id + i * interval
-            for i in range(num_frames)
-        ]
-        target_ptr = 0
-        max_target_id = target_ids[-1]
-
-        frames = []
-        first_frame = None
-        current_id = 0
-
-        for frame in container.decode(stream):
-
-            if current_id > max_target_id:
-                break
-
-            if current_id == target_ids[target_ptr]:
-                
-            
-                img = frame.to_ndarray(format="rgb24")
-                img = self.crop_and_resize_np(img)
-
-                if first_frame is None:
-                    first_frame = np.array(img)
-
-                img_tensor = torch.from_numpy(img) 
-                frames.append(img_tensor.permute(2, 0, 1)) # HWC -> CHW
-
-                target_ptr += 1
-
-                if target_ptr == len(target_ids):
-                    break
-
-            current_id += 1
-
-        container.close()
-
-        if len(frames) != num_frames:
-            return None
-
-        frames = torch.stack(frames, dim=0)
-        frames = rearrange(frames, "T C H W -> C T H W")
-
-        if self.is_i2v:
-            return frames, first_frame
-        else:
-            return frames
-        
-
-    def load_video(self, file_path):
-        start_frame_id = 0
-        frames = self.load_frames_using_pyav(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames)
-        return frames
-    
-    
-    def is_image(self, file_path):
-        file_ext_name = file_path.split(".")[-1]
-        if file_ext_name.lower() in ["jpg", "jpeg", "png", "webp"]:
-            return True
-        return False
-    
-    
-    def load_image(self, file_path):
-        frame = Image.open(file_path).convert("RGB")
-        frame = np.array(frame) 
-        frame = self.crop_and_resize_np(frame)
-        first_frame = frame
-        frame = torch.from_numpy(frame)            # HWC uint8 tensor
-        frame = frame.permute(2, 0, 1)            # HWC -> CHW
-        frame = frame.unsqueeze(1)                 # CHW -> C 1 H W
-        return frame
-
-
-    def __getitem__(self, data_id):
-        while True:
-            try:
-                text = self.text[data_id]
-                path = self.path[data_id]
-                if self.is_image(path):
-                    if self.is_i2v:
-                        raise ValueError(f"{path} is not a video. I2V model doesn't support image-to-image training.")
-                    video = self.load_image(path)
-                else:
-                    video = self.load_video(path)
-                if self.is_i2v:
-                    video, first_frame = video
-                    data = {"text": text, "video": video, "path": path, "first_frame": first_frame}
-                else:
-                    data = {"text": text, "video": video, "path": path}
-                break
-            except:
-                data_id += 1
-        return data
-    
-
-    def __len__(self):
-        return len(self.path)
 
 
 
-class LightningModelForDataProcess(pl.LightningModule):
-    def __init__(self, text_encoder_path, vae_path, image_encoder_path=None, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
-        super().__init__()
-        model_path = [text_encoder_path, vae_path]
-        if image_encoder_path is not None:
-            model_path.append(image_encoder_path)
-        model_manager = ModelManager(torch_dtype=torch.bfloat16, device="cpu")
-        model_manager.load_models(model_path)
-        self.pipe = WanVideoReCamMasterPipeline.from_model_manager(model_manager)
-        self.pipe.vae = torch.compile(self.pipe.vae, mode="reduce-overhead")
-
-        self.tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
-
-    def test_step(self, batch, batch_idx):
-        text, video, path = batch["text"][0], batch["video"], batch["path"][0]
-        
-        self.pipe.device = self.device
-        if video is not None:
-            pth_path = path + ".tensors.pth"
-            if not os.path.exists(pth_path):
-                # prompt
-                prompt_emb = self.pipe.encode_prompt(text)
-                # video
-                video = video.to(self.pipe.device, non_blocking=True)
-                if video.dtype == torch.uint8:
-                    video = video.to(self.pipe.torch_dtype)
-                    video = video * (1/127.5) - 1.0
-                else:
-                    video = video.to(self.pipe.torch_dtype)
-                latents = self.pipe.encode_video(video, **self.tiler_kwargs)[0]
-                # image
-                if "first_frame" in batch:
-                    first_frame = Image.fromarray(batch["first_frame"][0].cpu().numpy())
-                    _, _, num_frames, height, width = video.shape
-                    image_emb = self.pipe.encode_image(first_frame, num_frames, height, width)
-                else:
-                    image_emb = {}
-                data = {"latents": latents, "prompt_emb": prompt_emb, "image_emb": image_emb}
-                torch.save(data, pth_path)
-            else:
-                print(f"File {pth_path} already exists, skipping.")
 
 class Camera(object):
     def __init__(self, c2w):
@@ -654,7 +433,7 @@ def data_process(args):
     dataloader = torch.utils.data.DataLoader(
         dataset,
         shuffle=False,
-        batch_size=8,
+        batch_size=1,
         num_workers=args.dataloader_num_workers
     )
     model = LightningModelForDataProcess(

@@ -151,6 +151,12 @@ class WanVideoReCamMasterPipeline(BasePipeline):
         prompt_emb = self.prompter.encode_prompt(prompt, positive=positive)
         return {"context": prompt_emb}
     
+    def batch_encode_image(self, images):
+        '''
+        images: tensor of shape (batch_size, height, width, 3)
+        '''
+        out = self.image_encoder.model.visual(images, use_31_block=True)
+        return out
     
     def encode_image(self, image, num_frames, height, width):
         image = self.preprocess_image(image.resize((width, height))).to(self.device)
