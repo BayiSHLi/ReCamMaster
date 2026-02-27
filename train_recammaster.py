@@ -23,8 +23,18 @@ import cv2
 class TextVideoDataset(torch.utils.data.Dataset):
     def __init__(self, base_path, metadata_path, max_num_frames=81, frame_interval=1, num_frames=81, height=480, width=832, is_i2v=False):
         metadata = pd.read_csv(metadata_path)
-        self.path = [os.path.join(base_path, "train", file_name) for file_name in metadata["file_name"]]
-        self.text = metadata["text"].to_list()
+        self.path = []
+        self.text = []
+        for file_name in metadata["file_name"]:
+            file_path = os.path.join(base_path, "train", file_name)
+            pth_path = file_path + ".tensors.pth"
+            if os.path.exists(pth_path):
+                continue
+            self.path.append(file_path)
+            self.text.append(metadata[metadata["file_name"] == file_name]["text"].values[0])
+
+        # self.path = [os.path.join(base_path, "train", file_name) for file_name in metadata["file_name"]]
+        # self.text = metadata["text"].to_list()
         
         self.max_num_frames = max_num_frames
         self.frame_interval = frame_interval
@@ -32,24 +42,6 @@ class TextVideoDataset(torch.utils.data.Dataset):
         self.height = height
         self.width = width
         self.is_i2v = is_i2v
-            
-        self.frame_process = v2.Compose([
-            v2.CenterCrop(size=(height, width)),
-            v2.Resize(size=(height, width), antialias=True),
-            v2.ToTensor(),
-            v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-        ])
-        
-        
-    def crop_and_resize(self, image):
-        width, height = image.size
-        scale = max(self.width / width, self.height / height)
-        image = torchvision.transforms.functional.resize(
-            image,
-            (round(height*scale), round(width*scale)),
-            interpolation=torchvision.transforms.InterpolationMode.BILINEAR
-        )
-        return image
 
 
     def crop_and_resize_np(self, img):
@@ -72,32 +64,6 @@ class TextVideoDataset(torch.utils.data.Dataset):
 
         return img
 
-    def load_frames_using_imageio(self, file_path, max_num_frames, start_frame_id, interval, num_frames, frame_process):
-        reader = imageio.get_reader(file_path)
-        if reader.count_frames() < max_num_frames or reader.count_frames() - 1 < start_frame_id + (num_frames - 1) * interval:
-            reader.close()
-            return None
-        
-        frames = []
-        first_frame = None
-        for frame_id in range(num_frames):
-            frame = reader.get_data(start_frame_id + frame_id * interval)
-            frame = Image.fromarray(frame)
-            frame = self.crop_and_resize(frame)
-            if first_frame is None:
-                first_frame = np.array(frame)
-            frame = frame_process(frame)
-            frames.append(frame)
-        reader.close()
-
-        frames = torch.stack(frames, dim=0)
-        frames = rearrange(frames, "T C H W -> C T H W")
-
-        if self.is_i2v:
-            return frames, first_frame
-        else:
-            return frames
-
 
     def load_frames_using_pyav(
         self,
@@ -106,7 +72,6 @@ class TextVideoDataset(torch.utils.data.Dataset):
         start_frame_id,
         interval,
         num_frames,
-        frame_process
     ):
         try:
             container = av.open(file_path)
@@ -147,22 +112,22 @@ class TextVideoDataset(torch.utils.data.Dataset):
             if current_id > max_target_id:
                 break
 
-            if current_id != target_ids[target_ptr]:
-                continue
+            if current_id == target_ids[target_ptr]:
+                
             
-            img = frame.to_ndarray(format="rgb24")
-            img = self.crop_and_resize_np(img)
+                img = frame.to_ndarray(format="rgb24")
+                img = self.crop_and_resize_np(img)
 
-            if first_frame is None:
-                first_frame = np.array(img)
+                if first_frame is None:
+                    first_frame = np.array(img)
 
-            img_tensor = torch.from_numpy(img) 
-            frames.append(img_tensor.permute(2, 0, 1)) # HWC -> CHW
+                img_tensor = torch.from_numpy(img) 
+                frames.append(img_tensor.permute(2, 0, 1)) # HWC -> CHW
 
-            target_ptr += 1
+                target_ptr += 1
 
-            if target_ptr == len(target_ids):
-                break
+                if target_ptr == len(target_ids):
+                    break
 
             current_id += 1
 
@@ -182,8 +147,7 @@ class TextVideoDataset(torch.utils.data.Dataset):
 
     def load_video(self, file_path):
         start_frame_id = 0
-        # frames = self.load_frames_using_imageio(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, self.frame_process)
-        frames = self.load_frames_using_pyav(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames, frame_process=None)
+        frames = self.load_frames_using_pyav(file_path, self.max_num_frames, start_frame_id, self.frame_interval, self.num_frames)
         return frames
     
     
@@ -196,10 +160,12 @@ class TextVideoDataset(torch.utils.data.Dataset):
     
     def load_image(self, file_path):
         frame = Image.open(file_path).convert("RGB")
-        frame = self.crop_and_resize(frame)
+        frame = np.array(frame) 
+        frame = self.crop_and_resize_np(frame)
         first_frame = frame
-        frame = self.frame_process(frame)
-        frame = rearrange(frame, "C H W -> C 1 H W")
+        frame = torch.from_numpy(frame)            # HWC uint8 tensor
+        frame = frame.permute(2, 0, 1)            # HWC -> CHW
+        frame = frame.unsqueeze(1)                 # CHW -> C 1 H W
         return frame
 
 
@@ -242,7 +208,7 @@ class LightningModelForDataProcess(pl.LightningModule):
         self.pipe.vae = torch.compile(self.pipe.vae, mode="reduce-overhead")
 
         self.tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
-    
+
     def test_step(self, batch, batch_idx):
         text, video, path = batch["text"][0], batch["video"], batch["path"][0]
         
