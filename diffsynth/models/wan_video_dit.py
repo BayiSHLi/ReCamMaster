@@ -211,6 +211,10 @@ class DiTBlock(nn.Module):
         cam_emb = cam_emb.repeat(1, 2, 1)
         cam_emb = cam_emb.unsqueeze(2).unsqueeze(3).repeat(1, 1, 30, 52, 1)
         cam_emb = rearrange(cam_emb, 'b f h w d -> b (f h w) d')
+        # # modified to suit different input size
+        # L = int(input_x.shape[1] // cam_emb.shape[1])
+        # cam_emb = cam_emb.unsqueeze(2).repeat(1, 1, L, 1)
+        # cam_emb = rearrange(cam_emb, 'b f L d -> b (f L) d')
         input_x = input_x + cam_emb
         x = x + gate_msa * self.projector(self.self_attn(input_x, freqs))
         

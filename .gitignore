@@ -7,3 +7,4 @@ Wan-AI
 /camera_visualizations
 /ckpts
 *.log
+*.pid
