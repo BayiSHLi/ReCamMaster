@@ -85,6 +85,9 @@ def _parse_args() -> argparse.Namespace:
 	parser.add_argument("--cfg_scale", type=float, default=5.0, help="Classifier-free guidance scale for inference")
 	parser.add_argument("--height", type=int, default=480, help="Height to resize input videos to")
 	parser.add_argument("--width", type=int, default=832, help="Width to resize input videos to")
+	parser.add_argument("--start_sample_idx", type=int, default=0, help="Start reading dataset from this global sample index (0-based)")
+	parser.add_argument("--dataset_shuffle", action="store_true", help="Enable dataset shuffle (disabled by default for deterministic reading)")
+	parser.add_argument("--dataset_seed", type=int, default=42, help="Dataset shuffle seed (used only when --dataset_shuffle is enabled)")
 	parser.add_argument("--num_inference_steps", type=int, default=50, help="Number of denoising steps for generation")
 	parser.add_argument("--seed", type=int, default=0, help="Random seed used in generation")
 	parser.add_argument("--num_gpus", type=int, default=-1, help="Number of GPUs to use for parallel generation. -1 means all visible GPUs")
@@ -145,7 +148,8 @@ class Camera(object):
 
 class WebVidDataset(IterableDataset):
 	def __init__(self, data_root, save_dir, num_samples, max_num_frames=81, shuffle=True, seed=42, buffer_size=10000, 
-			  frame_interval=1, num_frames=81, height=480, width=832, shard_rank=0, num_shards=1, save_original_video=False):
+			  frame_interval=1, num_frames=81, height=480, width=832, shard_rank=0, num_shards=1, save_original_video=False,
+			  start_sample_idx=0):
 		self.num_samples = num_samples
 		self.max_num_frames = max_num_frames
 		self.shuffle = shuffle
@@ -159,6 +163,7 @@ class WebVidDataset(IterableDataset):
 		self.shard_rank = shard_rank
 		self.num_shards = max(1, num_shards)
 		self.save_original_video_flag = save_original_video
+		self.start_sample_idx = max(0, int(start_sample_idx))
 
 		data_path = Path(data_root) / "data/train-*.parquet"
 		self.dataset = load_dataset(
@@ -245,7 +250,9 @@ class WebVidDataset(IterableDataset):
 		for raw_idx, sample in enumerate(self.dataset):
 			if self.num_samples != -1 and count >= self.num_samples:
 				break
-			if raw_idx % self.num_shards != self.shard_rank:
+			if raw_idx < self.start_sample_idx:
+				continue
+			if (raw_idx - self.start_sample_idx) % self.num_shards != self.shard_rank:
 				continue
 
 			video = sample["video"]
@@ -486,6 +493,8 @@ def _run_worker(rank: int, args: argparse.Namespace, gpu_ids: List[int]) -> None
 		args.save_dir,
 		num_samples=local_samples,
 		max_num_frames=args.num_frames,
+		shuffle=args.dataset_shuffle,
+		seed=args.dataset_seed,
 		frame_interval=4,
 		num_frames=21,
 		height=args.height,
@@ -493,9 +502,13 @@ def _run_worker(rank: int, args: argparse.Namespace, gpu_ids: List[int]) -> None
 		shard_rank=rank,
 		num_shards=len(gpu_ids),
 		save_original_video=args.save_original_video,
+		start_sample_idx=args.start_sample_idx,
 	)
 
-	print(f"[Worker {rank}] device={device}, local_samples={local_samples}, trajectories={len(trajs)}")
+	print(
+		f"[Worker {rank}] device={device}, local_samples={local_samples}, trajectories={len(trajs)}, "
+		f"start_sample_idx={args.start_sample_idx}, dataset_shuffle={args.dataset_shuffle}"
+	)
 
 	pending = []
 	skipped_samples = 0
@@ -583,6 +596,8 @@ def _run_worker(rank: int, args: argparse.Namespace, gpu_ids: List[int]) -> None
 
 def main() -> None:
 	args = _parse_args()
+	if args.start_sample_idx < 0:
+		raise ValueError(f"--start_sample_idx must be >= 0, got {args.start_sample_idx}")
 	selected_metrics = _select_metrics(args.metrics)
 	config = _build_config(args)
 

@@ -14,18 +14,25 @@ PID_FILE="${PID_FILE:-${LOG_DIR}/run_evaluation_${TIMESTAMP}.pid}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 WORKER_LOG_DIR_DEFAULT="${LOG_DIR}/workers/run_${TIMESTAMP}"
 WORKER_LOG_DIR="${WORKER_LOG_DIR:-$WORKER_LOG_DIR_DEFAULT}"
+START_SAMPLE_IDX="${START_SAMPLE_IDX:-0}"
 
 HAS_WORKER_LOG_DIR_ARG=0
+HAS_START_SAMPLE_IDX_ARG=0
 for arg in "$@"; do
 	if [[ "$arg" == "--worker-log-dir" ]] || [[ "$arg" == --worker-log-dir=* ]]; then
 		HAS_WORKER_LOG_DIR_ARG=1
-		break
+	fi
+	if [[ "$arg" == "--start_sample_idx" ]] || [[ "$arg" == --start_sample_idx=* ]]; then
+		HAS_START_SAMPLE_IDX_ARG=1
 	fi
 done
 
 EXTRA_ARGS=()
 if [[ "$HAS_WORKER_LOG_DIR_ARG" -eq 0 ]]; then
 	EXTRA_ARGS+=("--worker-log-dir" "$WORKER_LOG_DIR")
+fi
+if [[ "$HAS_START_SAMPLE_IDX_ARG" -eq 0 ]]; then
+	EXTRA_ARGS+=("--start_sample_idx" "$START_SAMPLE_IDX")
 fi
 
 mkdir -p "$WORKER_LOG_DIR"
@@ -42,5 +49,6 @@ echo "PID: $PID"
 echo "PID file: $PID_FILE"
 echo "Log file: $LOG_FILE"
 echo "Worker logs dir: $WORKER_LOG_DIR"
+echo "Start sample idx: ${START_SAMPLE_IDX}"
 echo "Tail logs with: tail -f $LOG_FILE"
 echo "Tail worker logs with: tail -f ${WORKER_LOG_DIR}/run_*_worker*_gpu*.log"

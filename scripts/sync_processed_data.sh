@@ -4,10 +4,10 @@
 # Configurable Parameters
 # ==============================
 
-SOURCE_DIR="/mnt/hdd/dataset/MultiCamVideo-Dataset/train/"
+SOURCE_DIR="/mnt/hdd/dataset/webvid10m/data/"
 TARGET_USER="root"
 TARGET_HOST="10.97.40.240"
-TARGET_DIR="/mnt/hdd/dataset/MultiCamVideo-Dataset/train/"
+TARGET_DIR="/dataset/webvid10m/data/"
 
 MODE="push"      # push | pull
 DRY_RUN=false    # true | false
@@ -26,9 +26,6 @@ if [ "$MODE" = "push" ]; then
     echo ">>> Pushing processed .pth files to $TARGET_HOST ..."
     
     rsync $RSYNC_FLAGS \
-        --include="*/" \
-        --include="*.pth" \
-        --exclude="*" \
         "$SOURCE_DIR" \
         "${TARGET_USER}@${TARGET_HOST}:${TARGET_DIR}"
 
@@ -36,9 +33,6 @@ elif [ "$MODE" = "pull" ]; then
     echo ">>> Pulling processed .pth files from $TARGET_HOST ..."
     
     rsync $RSYNC_FLAGS \
-        --include="*/" \
-        --include="*.pth" \
-        --exclude="*" \
         "${TARGET_USER}@${TARGET_HOST}:${TARGET_DIR}" \
         "$SOURCE_DIR"
 
