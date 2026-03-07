@@ -75,6 +75,9 @@ def _parse_args() -> argparse.Namespace:
 	parser.add_argument("--num_frames", type=int, default=81, help="Number of frames to evaluate for each video")
 	parser.add_argument("--ckpt_path", type=str, default="./models/ReCamMaster/checkpoints/step20000.ckpt", help="Path to ReCamMaster checkpoint")
 	parser.add_argument("--max_samples", type=int, default=20, help="Max number of videos from dataset to calucate metrics. Set to -1 to use all videos.")
+	parser.add_argument("--start_sample_idx", type=int, default=0, help="Start reading dataset from this global sample index (0-based)")
+	parser.add_argument("--dataset_shuffle", action="store_true", help="Enable dataset shuffle (disabled by default for deterministic reading)")
+	
 	parser.add_argument("--save_dir", type=str, default="/mnt/hdd/dataset/webvid10m/outputs", help="Directory to save generated videos and intermediate results")
 	parser.add_argument(
 		"--output-json",
@@ -85,8 +88,6 @@ def _parse_args() -> argparse.Namespace:
 	parser.add_argument("--cfg_scale", type=float, default=5.0, help="Classifier-free guidance scale for inference")
 	parser.add_argument("--height", type=int, default=480, help="Height to resize input videos to")
 	parser.add_argument("--width", type=int, default=832, help="Width to resize input videos to")
-	parser.add_argument("--start_sample_idx", type=int, default=0, help="Start reading dataset from this global sample index (0-based)")
-	parser.add_argument("--dataset_shuffle", action="store_true", help="Enable dataset shuffle (disabled by default for deterministic reading)")
 	parser.add_argument("--dataset_seed", type=int, default=42, help="Dataset shuffle seed (used only when --dataset_shuffle is enabled)")
 	parser.add_argument("--num_inference_steps", type=int, default=50, help="Number of denoising steps for generation")
 	parser.add_argument("--seed", type=int, default=0, help="Random seed used in generation")
