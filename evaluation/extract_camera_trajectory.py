@@ -28,7 +28,7 @@ except ModuleNotFoundError:
 def extract_camera_trajectory_from_video(
     video_path: str,
     output_dir: str,
-    trajectory_backend: str = "pycolmap",
+    trajectory_backend: str = "glomap",
     camera_model: str = "PINHOLE",
     frame_skip: int = 1,
     max_frames: Optional[int] = None,

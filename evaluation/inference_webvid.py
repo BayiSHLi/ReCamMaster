@@ -1,24 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-import pyarrow.parquet as pq
-import glob
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from torch import nn
 from typing import Any, Callable, Dict, List
-from diffsynth import ModelManager, WanVideoReCamMasterPipeline, save_video
+from diffsynth import ModelManager, WanVideoReCamMasterPipeline
 # from diffsynth.extensions.ImageQualityMetric import config
 from einops import rearrange
-from torch.utils.data import IterableDataset, get_worker_info
-from datasets import load_dataset
-from torchcodec.decoders import VideoDecoder
+from torch.utils.data import Dataset
+import av
 import imageio.v2 as imageio
 from tqdm import tqdm
 
@@ -48,7 +46,8 @@ def _parse_args() -> argparse.Namespace:
 		help="Comma-separated metrics to run: camera,matching,clip,fvd",
 	)
 	
-	parser.add_argument("--data_root", type=str, default="/mnt/hdd/dataset/webvid10m/", help="Root directory containing video files and camera jsons")
+	parser.add_argument("--data_root", type=str, default="/mnt/hdd/dataset/webvid", help="Root directory containing videos/ and 0000.csv")
+	parser.add_argument("--metadata_csv", type=str, default="0000.csv", help="CSV filename under data_root; column 'name' is used as text prompt")
 	parser.add_argument("--gt_camera_json", type=str, default="", help="Path to GT camera extrinsics json")
 	parser.add_argument("--num_frames", type=int, default=81, help="Number of frames to evaluate for each video")
 	parser.add_argument("--ckpt_path", type=str, default="./models/ReCamMaster/checkpoints/step20000.ckpt", help="Path to ReCamMaster checkpoint")
@@ -56,7 +55,7 @@ def _parse_args() -> argparse.Namespace:
 	parser.add_argument("--start_sample_idx", type=int, default=0, help="Start reading dataset from this global sample index (0-based)")
 	parser.add_argument("--dataset_shuffle", action="store_true", help="Enable dataset shuffle (disabled by default for deterministic reading)")
 	
-	parser.add_argument("--save_dir", type=str, default="/mnt/hdd/dataset/webvid10m/outputs", help="Directory to save generated videos and intermediate results")
+	parser.add_argument("--save_dir", type=str, default="", help="Directory to save generated videos and intermediate results. Empty means <data_root>/outputs")
 	parser.add_argument(
 		"--output-json",
 		type=str,
@@ -72,7 +71,6 @@ def _parse_args() -> argparse.Namespace:
 	parser.add_argument("--num_gpus", type=int, default=-1, help="Number of GPUs to use for parallel generation. -1 means all visible GPUs")
 	parser.add_argument("--gpu_ids", type=str, default="", help="Comma-separated GPU ids, e.g. 0,1. Empty means using first num_gpus GPUs")
 	parser.add_argument("--writer_threads", type=int, default=2, help="Thread count for asynchronous video writing")
-	parser.add_argument("--save_original_video", action="store_true", help="Save decoded source/original videos for each sample")
 	parser.add_argument("--show_progress", action="store_true", help="Show per-video denoising progress bars")
 	parser.add_argument("--no_show_progress", action="store_false", dest="show_progress", help="Disable denoising progress bars")
 	parser.set_defaults(show_progress=True)
@@ -87,9 +85,9 @@ class Camera(object):
         self.w2c_mat = np.linalg.inv(c2w_mat)
 
 
-class WebVidDataset(IterableDataset):
-	def __init__(self, data_root, save_dir, num_samples, max_num_frames=81, shuffle=True, seed=42, buffer_size=10000, 
-			  frame_interval=1, num_frames=81, height=480, width=832, shard_rank=0, num_shards=1, save_original_video=False,
+class WebVidDataset(Dataset):
+	def __init__(self, data_root, save_dir, num_samples, csv_file="0000.csv", max_num_frames=81, shuffle=True, seed=42, buffer_size=10000, 
+			  frame_interval=1, num_frames=81, height=480, width=832, shard_rank=0, num_shards=1, 
 			  start_sample_idx=0):
 		self.num_samples = num_samples
 		self.max_num_frames = max_num_frames
@@ -103,26 +101,116 @@ class WebVidDataset(IterableDataset):
 		self.width = width
 		self.shard_rank = shard_rank
 		self.num_shards = max(1, num_shards)
-		self.save_original_video_flag = save_original_video
 		self.start_sample_idx = max(0, int(start_sample_idx))
 
-		data_path = Path(data_root) / "data/train-*.parquet"
-		self.dataset = load_dataset(
-			"parquet",
-			data_files=str(data_path),
-			streaming=True,
-		)["train"]
-		if self.shuffle:
-			self.dataset = self.dataset.shuffle(
-                buffer_size=self.buffer_size,
-                seed=self.seed,
-            )
+		self.data_root = Path(data_root)
+		self.video_root = self.data_root / "videos"
+		
+		self.csv_path = self.data_root / csv_file
+		if not self.csv_path.is_file():
+			raise FileNotFoundError(f"Metadata CSV not found: {self.csv_path}")
+
+		self.data_paths = sorted(self.video_root.glob("*.mp4"))
+		if not self.data_paths:
+			raise FileNotFoundError(f"No .mp4 files found in {self.video_root}")
+
+		self.samples = self._build_samples()
+		if not self.samples:
+			raise RuntimeError(
+				f"No valid samples were resolved from {self.video_root} and {self.csv_path}. "
+				"Please check video ids and CSV columns."
+			)
+		self.index_map = self._build_index_map()
 
 		self.frame_process = v2.Compose([
             v2.CenterCrop(size=(height, width)),
-		v2.ToDtype(torch.float32, scale=True),
-		v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+			v2.ToDtype(torch.float32, scale=True),
+			v2.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
         ])
+
+	def _build_index_map(self) -> List[tuple[int, int]]:
+		ordered_indices = np.arange(len(self.samples), dtype=np.int64)
+		if self.shuffle:
+			rng = np.random.default_rng(self.seed)
+			rng.shuffle(ordered_indices)
+
+		mapped: List[tuple[int, int]] = []
+		for raw_idx, sample_idx in enumerate(ordered_indices.tolist()):
+			if raw_idx < self.start_sample_idx:
+				continue
+			if (raw_idx - self.start_sample_idx) % self.num_shards != self.shard_rank:
+				continue
+			mapped.append((raw_idx, int(sample_idx)))
+
+		if self.num_samples != -1:
+			mapped = mapped[: self.num_samples]
+		return mapped
+
+	@staticmethod
+	def _normalize_video_key(raw_key: str) -> str:
+		key = str(raw_key).strip()
+		if key.lower().endswith(".mp4"):
+			key = key[:-4]
+		# Local WebVid files may end with '+', e.g., '<id>+.mp4'.
+		return key.rstrip("+").strip()
+
+	def _load_csv_rows(self) -> List[Dict[str, str]]:
+		rows: List[Dict[str, str]] = []
+		with self.csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+			reader = csv.DictReader(f)
+			for row in reader:
+				rows.append({k: (v if v is not None else "") for k, v in row.items()})
+		return rows
+
+	def _build_samples(self) -> List[Dict[str, Any]]:
+		rows = self._load_csv_rows()
+		if not rows:
+			return []
+
+		text_column = "name" if "name" in rows[0] else "text"
+		if text_column not in rows[0]:
+			raise KeyError(f"CSV {self.csv_path} must contain a 'name' column (or fallback 'text').")
+
+		id_column = None
+		for candidate in ("videoid", "video_id", "id", "file_name", "filename"):
+			if candidate in rows[0]:
+				id_column = candidate
+				break
+
+		if id_column is not None:
+			id_to_text: Dict[str, str] = {}
+			for row in rows:
+				text = str(row.get(text_column, "")).strip()
+				if not text:
+					continue
+				video_key = self._normalize_video_key(str(row.get(id_column, "")))
+				if video_key:
+					id_to_text[video_key] = text
+
+			resolved: List[Dict[str, Any]] = []
+			for video_path in self.data_paths:
+				video_key = self._normalize_video_key(video_path.stem)
+				text = id_to_text.get(video_key)
+				if text is None:
+					continue
+				resolved.append({"video_path": video_path, "text": text})
+
+			if resolved:
+				if len(resolved) < len(self.data_paths):
+					print(
+						f"[WebVidDataset] matched {len(resolved)}/{len(self.data_paths)} videos by id column '{id_column}'."
+					)
+				return resolved
+
+		# Fallback: pair by sorted order when id mapping is unavailable.
+		texts = [str(row.get(text_column, "")).strip() for row in rows]
+		texts = [item for item in texts if item]
+		n = min(len(self.data_paths), len(texts))
+		if n == 0:
+			return []
+		if n < len(self.data_paths):
+			print(f"[WebVidDataset] CSV text rows ({len(texts)}) < videos ({len(self.data_paths)}); using first {n} pairs.")
+		return [{"video_path": self.data_paths[i], "text": texts[i]} for i in range(n)]
 
 	def crop_and_resize(self, frames: torch.Tensor):
 		_, _, height, width = frames.shape
@@ -133,69 +221,77 @@ class WebVidDataset(IterableDataset):
 			interpolation=torchvision.transforms.InterpolationMode.BILINEAR
 		)
 		return frames
-	
-	def decode_video(self, video:VideoDecoder) -> torch.Tensor:
-		if video.metadata.num_frames < self.max_num_frames or video.metadata.num_frames - 1 < self.frame_interval * (self.num_frames - 1):
-			return None
+
+	def read_video(self, video_path: Path) -> torch.Tensor | None:
+		container = None
 		try:
-			fps = video.metadata.fps
-		except:
-			fps = 30  # fallback
-		frames = []
-		for i in range(self.max_num_frames):
-			frame = video[i]  
-			frames.append(frame)
-		frames = torch.stack(frames)  # (T, C, H, W)
+			container = av.open(str(video_path))
+			video_stream = container.streams.video[0]
+			video_stream.thread_type = "AUTO"
+		except Exception:
+			if container is not None:
+				try:
+					container.close()
+				except Exception:
+					pass
+			return None
 
-		original_frames = frames.clone()
-
-		frames = self.crop_and_resize(frames)
-		frames = self.frame_process(frames)  # (T, C, H, W)
-		frames = rearrange(frames, "T C H W -> C T H W")
-
-		return frames, original_frames
-
-	def save_original_video(self, video_tensor: torch.Tensor, save_path: Path, fps: int = 30):
-		video_tensor = video_tensor.permute(0, 2, 3, 1)  # (T, H, W, C)
-		video_tensor = video_tensor.to(torch.uint8).cpu().numpy()
-		save_path.parent.mkdir(parents=True, exist_ok=True)
-		save_video(video_tensor, save_path, fps=fps)
-
-	def __len__(self):
-		return self.num_samples
-	
-
-
-	def __iter__(self):
-		count = 0
-
-		for raw_idx, sample in enumerate(self.dataset):
-			if self.num_samples != -1 and count >= self.num_samples:
-				break
-			if raw_idx < self.start_sample_idx:
-				continue
-			if (raw_idx - self.start_sample_idx) % self.num_shards != self.shard_rank:
-				continue
-
-			video = sample["video"]
-			text = sample["text"]
-
+		required_span = (self.num_frames - 1) * self.frame_interval + 1
+		decoded_frames: List[torch.Tensor] = []
+		try:
+			for frame in container.decode(video=0):
+				frame_rgb = frame.to_ndarray(format="rgb24")
+				decoded_frames.append(torch.from_numpy(frame_rgb).permute(2, 0, 1))
+				if self.max_num_frames > 0 and len(decoded_frames) >= self.max_num_frames:
+					break
+		except Exception:
+			decoded_frames = []
+		finally:
 			try:
-				frames, original_frames = self.decode_video(video)
-				if frames is None:
-					continue
-				if self.save_original_video_flag:
-					self.save_original_video(original_frames, Path(self.save_dir) / f"video_{raw_idx}" / "original.mp4", fps=30)
+				container.close()
 			except Exception:
-				continue
+				pass
 
-			yield {
-				"video": frames,
-				"text": text,
-				"index": raw_idx,
-			}
+		effective_total = len(decoded_frames)
+		if effective_total < required_span:
+			return None
 
-			count += 1	
+		start_frame_id = max(0, (effective_total - required_span) // 2)
+		frames = [decoded_frames[start_frame_id + i * self.frame_interval] for i in range(self.num_frames)]
+
+		video = torch.stack(frames, dim=0)
+		video = self.crop_and_resize(video)
+		video = self.frame_process(video)
+		video = rearrange(video, "t c h w -> c t h w")
+		return video
+	
+	def __len__(self):
+		return len(self.index_map)
+
+	def __getitem__(self, idx: int):
+		if idx < 0 or idx >= len(self.index_map):
+			raise IndexError(idx)
+
+		raw_idx, sample_idx = self.index_map[idx]
+		sample = self.samples[sample_idx]
+		video_path = sample["video_path"]
+		text = sample["text"]
+		video_id = self._normalize_video_key(video_path.stem)
+
+		try:
+			frames = self.read_video(video_path)
+			if frames is None:
+				return None
+		except Exception:
+			return None
+
+		return {
+			"video": frames,
+			"text": text,
+			"index": raw_idx,
+			"video_id": video_id,
+			"video_path": str(video_path),
+		}
 
 
 def parse_matrix(matrix_str):
@@ -248,7 +344,7 @@ def _is_valid_generated_video(video_path: Path) -> bool:
 def _get_missing_camera_indices(save_dir: Path, num_cameras: int) -> List[int]:
 	missing = []
 	for i in range(num_cameras):
-		candidate = save_dir / f"cam_{i+1:02d}.mp4"
+		candidate = save_dir / f"cam{i+1:02d}.mp4"
 		if not _is_valid_generated_video(candidate):
 			missing.append(i)
 	return missing
@@ -424,16 +520,16 @@ def _run_worker(rank: int, args: argparse.Namespace, gpu_ids: List[int]) -> None
 		args.data_root,
 		args.save_dir,
 		num_samples=local_samples,
+		csv_file=args.metadata_csv,
 		max_num_frames=args.num_frames,
 		shuffle=args.dataset_shuffle,
 		seed=args.dataset_seed,
-		frame_interval=4,
-		num_frames=21,
+		frame_interval=1,
+		num_frames=81,
 		height=args.height,
 		width=args.width,
 		shard_rank=rank,
 		num_shards=len(gpu_ids),
-		save_original_video=args.save_original_video,
 		start_sample_idx=args.start_sample_idx,
 	)
 
@@ -449,10 +545,13 @@ def _run_worker(rank: int, args: argparse.Namespace, gpu_ids: List[int]) -> None
 	with ThreadPoolExecutor(max_workers=max(1, args.writer_threads)) as writer_pool:
 		with torch.inference_mode():
 			for sample in dataset:
+				if sample is None:
+					continue
 				target_text = sample["text"]
 				idx = sample["index"]
+				video_id = sample["video_id"]
 
-				save_dir = Path(args.save_dir) / f"video_{idx}"
+				save_dir = Path(args.save_dir) / video_id
 				save_dir.mkdir(parents=True, exist_ok=True)
 				missing_cam_indices = _get_missing_camera_indices(save_dir, len(trajs))
 
@@ -466,16 +565,16 @@ def _run_worker(rank: int, args: argparse.Namespace, gpu_ids: List[int]) -> None
 
 				for i in missing_cam_indices:
 					target_camera = trajs[i]
-					save_path = save_dir / f"cam_{i+1:02d}.mp4"
+					save_path = save_dir / f"cam{i+1:02d}.mp4"
 					if _is_valid_generated_video(save_path):
 						continue
-					lock_path = save_dir / f"cam_{i+1:02d}.lock"
+					lock_path = save_dir / f"cam{i+1:02d}.lock"
 					if not _try_acquire_generation_lock(lock_path):
 						continue
 
 					progress_cmd = _silent_progress
 					if args.show_progress:
-						progress_desc = f"[w{rank}] video_{idx}/cam_{i+1:02d}.mp4"
+						progress_desc = f"[w{rank}] {video_id}/cam{i+1:02d}.mp4"
 						progress_cmd = _build_named_progress_bar(progress_desc)
 
 					pipe_kwargs = dict(
@@ -530,6 +629,8 @@ def main() -> None:
 	args = _parse_args()
 	if args.start_sample_idx < 0:
 		raise ValueError(f"--start_sample_idx must be >= 0, got {args.start_sample_idx}")
+	if not args.save_dir:
+		args.save_dir = str(Path(args.data_root) / "outputs")
 
 	args.run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
 	args.worker_log_dir = str(_resolve_worker_log_dir(args.worker_log_dir, args.run_tag))
