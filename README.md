@@ -144,6 +144,38 @@ Step 4: Test the model
 python inference_recammaster.py --cam_type 1 --ckpt_path path/to/the/checkpoint
 ```
 
+### Camera Metric Evaluation (CameraCtrl Protocol)
+
+The camera metric implementation in `evaluation/` now strictly follows CameraCtrl (Sec. 3.4 + Appendix D.5):
+
+1. Extract camera poses for generated videos via COLMAP/PyCOLMAP.
+2. Convert both GT and predicted trajectories to relative poses by setting frame-0 to identity.
+3. Resolve COLMAP scale ambiguity by rescaling predicted translations with the frame0-frame1 translation-gap ratio.
+4. Compute `RotErr` and `TransErr` on the processed trajectories.
+
+Note:
+- The previous optional Umeyama center-alignment path has been removed.
+- The `--align_camera_centers` argument is no longer used in evaluation scripts.
+
+Example: evaluate one generated video folder (`video_0`) with COLMAP trajectory extraction:
+
+```shell
+python evaluation/eval_camra.py \
+  --generated_video_dir /path/to/outputs/video_0 \
+  --gt_camera_json example_test_data/cameras/camera_extrinsics.json \
+  --output_json /path/to/video_0_camera_metrics.json
+```
+
+Example: run merged evaluation for generated outputs:
+
+```shell
+python evaluation/run_evaluation.py \
+  --outputs_root /path/to/outputs \
+  --selected_metrics matching,clip,fvd,camera \
+  --gt_camera_json example_test_data/cameras/camera_extrinsics.json \
+  --output_json evaluation/results_webvid_eval.json
+```
+
 ## 📷 Dataset: MultiCamVideo Dataset
 ### 1. Dataset Introduction
 

@@ -46,28 +46,39 @@ def evaluate_camera_sequence(gt_poses, pred_poses):
         "frame_TransErr": np.array(trans_errors)
     }
 
-def align_poses_umeyama(gt_centers, pred_centers):
+def to_relative_poses(poses):
     """
-    Align predicted camera centers to GT centers using Umeyama.
-    gt_centers: (T,3)
-    pred_centers: (T,3)
+    Convert absolute c2w poses to relative poses by setting frame 0 to identity.
     """
-    mu_gt = np.mean(gt_centers, axis=0)
-    mu_pred = np.mean(pred_centers, axis=0)
+    poses = np.asarray(poses, dtype=np.float64)
+    if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+        raise ValueError(f"poses must have shape (T, 4, 4), got {poses.shape}")
+    if poses.shape[0] == 0:
+        raise ValueError("poses is empty")
 
-    X = gt_centers - mu_gt
-    Y = pred_centers - mu_pred
+    base_inv = np.linalg.inv(poses[0])
+    relative = np.stack([base_inv @ pose for pose in poses], axis=0)
+    return relative
 
-    cov = Y.T @ X / len(X)
-    U, S, Vt = np.linalg.svd(cov)
 
-    R = U @ Vt
-    if np.linalg.det(R) < 0:
-        Vt[-1,:] *= -1
-        R = U @ Vt
+def rescale_translation_with_first_gap(gt_relative_poses, pred_relative_poses):
+    """
+    Rescale generated trajectory translation using the frame-0 to frame-1 gap.
 
-    scale = np.trace(np.diag(S)) / np.sum(Y**2)
+    This follows CameraCtrl Appendix D.5 postprocessing for COLMAP scale ambiguity.
+    """
+    gt_relative_poses = np.asarray(gt_relative_poses, dtype=np.float64)
+    pred_relative_poses = np.asarray(pred_relative_poses, dtype=np.float64)
 
-    t = mu_gt - scale * R @ mu_pred
+    if gt_relative_poses.shape[0] < 2 or pred_relative_poses.shape[0] < 2:
+        raise ValueError("Need at least 2 frames to estimate CameraCtrl translation scale")
 
-    return scale, R, t
+    gt_gap = np.linalg.norm(gt_relative_poses[1, :3, 3] - gt_relative_poses[0, :3, 3])
+    pred_gap = np.linalg.norm(pred_relative_poses[1, :3, 3] - pred_relative_poses[0, :3, 3])
+    if pred_gap <= 1e-12:
+        raise ValueError("Predicted translation gap between first two frames is near zero")
+
+    scale = gt_gap / pred_gap
+    scaled_pred = pred_relative_poses.copy()
+    scaled_pred[:, :3, 3] *= scale
+    return scaled_pred
