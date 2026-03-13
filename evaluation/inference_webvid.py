@@ -34,6 +34,27 @@ if str(_REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(_REPO_ROOT))
 
 
+def _resolve_gt_camera_json_path(path_value: str) -> Path:
+	raw = Path(path_value)
+	candidates: List[Path] = []
+	if raw.is_absolute():
+		candidates.append(raw)
+	else:
+		candidates.extend([
+			Path.cwd() / raw,
+			_REPO_ROOT / raw,
+			_THIS_DIR / raw,
+			_THIS_DIR / raw.name,
+		])
+
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate.resolve()
+
+	searched = ", ".join(str(path) for path in candidates)
+	raise FileNotFoundError(f"gt_camera_json not found: {path_value}. Searched: {searched}")
+
+
 
 
 def _parse_args() -> argparse.Namespace:
@@ -48,7 +69,7 @@ def _parse_args() -> argparse.Namespace:
 	
 	parser.add_argument("--data_root", type=str, default="/mnt/hdd/dataset/webvid", help="Root directory containing videos/ and 0000.csv")
 	parser.add_argument("--metadata_csv", type=str, default="0000.csv", help="CSV filename under data_root; column 'name' is used as text prompt")
-	parser.add_argument("--gt_camera_json", type=str, default="", help="Path to GT camera extrinsics json")
+	parser.add_argument("--gt_camera_json", type=str, default="evaluation/camera_extrinsics.json", help="Path to GT camera extrinsics json")
 	parser.add_argument("--num_frames", type=int, default=81, help="Number of frames to evaluate for each video")
 	parser.add_argument("--ckpt_path", type=str, default="./models/ReCamMaster/checkpoints/step20000.ckpt", help="Path to ReCamMaster checkpoint")
 	parser.add_argument("--max_samples", type=int, default=20, help="Max number of videos from dataset to calucate metrics. Set to -1 to use all videos.")
@@ -450,9 +471,9 @@ def _resolve_gpu_ids(args: argparse.Namespace) -> List[int]:
 	return gpu_ids
 
 
-def _build_target_trajectories(num_frames: int) -> List[torch.Tensor]:
-	tgt_camera_path = "./example_test_data/cameras/camera_extrinsics.json"
-	with open(tgt_camera_path, 'r') as file:
+def _build_target_trajectories(num_frames: int, gt_camera_json: str) -> List[torch.Tensor]:
+	tgt_camera_path = _resolve_gt_camera_json_path(gt_camera_json)
+	with tgt_camera_path.open("r", encoding="utf-8") as file:
 		cam_data = json.load(file)
 	trajs: List[torch.Tensor] = []
 	for cam_type in cam_data["frame0"].keys():
@@ -514,7 +535,10 @@ def _run_worker(rank: int, args: argparse.Namespace, gpu_ids: List[int]) -> None
 
 	local_samples = _split_max_samples(args.max_samples, rank, len(gpu_ids))
 	pipe = _init_pipeline(args, device=device)
-	trajs = [traj.to(device=device, dtype=torch.bfloat16, non_blocking=True) for traj in _build_target_trajectories(args.num_frames)]
+	trajs = [
+		traj.to(device=device, dtype=torch.bfloat16, non_blocking=True)
+		for traj in _build_target_trajectories(args.num_frames, args.gt_camera_json)
+	]
 
 	dataset = WebVidDataset(
 		args.data_root,

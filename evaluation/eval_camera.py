@@ -8,27 +8,40 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
-try:
-	from evaluation.utils.pose_utils import (
-		evaluate_camera_sequence,
-		rescale_translation_with_first_gap,
-		to_relative_poses,
-	)
-except ModuleNotFoundError:
-	from utils.pose_utils import (
-		evaluate_camera_sequence,
-		rescale_translation_with_first_gap,
-		to_relative_poses,
-	)
-
-try:
-	from evaluation.extract_camera_trajectory import extract_camera_trajectory_from_video
-except ModuleNotFoundError:
-	from extract_camera_trajectory import extract_camera_trajectory_from_video
+from utils.pose_utils import (
+	evaluate_camera_sequence,
+	rescale_translation_with_first_gap,
+	to_relative_poses,
+)
+from extract_camera_trajectory_colmap import extract_camera_trajectory_from_video_colmap
 
 
 _ROW_PATTERN = re.compile(r"\[([^\]]+)\]")
 _CAM_VIDEO_PATTERN = "cam[0-9][0-9].mp4"
+
+
+def _resolve_gt_camera_json_path(path_value: str) -> Path:
+	raw = Path(path_value)
+	eval_dir = Path(__file__).resolve().parent
+	repo_root = eval_dir.parent
+
+	candidates: List[Path] = []
+	if raw.is_absolute():
+		candidates.append(raw)
+	else:
+		candidates.extend([
+			Path.cwd() / raw,
+			repo_root / raw,
+			eval_dir / raw,
+			eval_dir / raw.name,
+		])
+
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate.resolve()
+
+	searched = ", ".join(str(path) for path in candidates)
+	raise FileNotFoundError(f"gt_camera_json not found: {path_value}. Searched: {searched}")
 
 
 def _parse_pose_row(row_text: str) -> np.ndarray:
@@ -325,7 +338,8 @@ def evaluate_video_dir_with_glomap(args: argparse.Namespace) -> Dict[str, Any]:
 	if args.frame_skip <= 0:
 		raise ValueError(f"--frame_skip must be > 0, got {args.frame_skip}")
 
-	gt_path = Path(args.gt_camera_json)
+	gt_path = _resolve_gt_camera_json_path(args.gt_camera_json)
+	args.gt_camera_json = str(gt_path)
 	with gt_path.open("r", encoding="utf-8") as f:
 		gt_payload: Dict[str, Dict[str, str]] = json.load(f)
 
@@ -343,10 +357,9 @@ def evaluate_video_dir_with_glomap(args: argparse.Namespace) -> Dict[str, Any]:
 		gt_camera_key = _gt_camera_key_from_cam_video(cam_video.name)
 		traj_out_dir = Path(args.trajectory_root) / cam_video.stem
 
-		trajectory_result = extract_camera_trajectory_from_video(
+		trajectory_result = extract_camera_trajectory_from_video_colmap(
 			video_path=str(cam_video),
 			output_dir=str(traj_out_dir),
-			trajectory_backend=args.trajectory_backend,
 			camera_model=args.camera_model,
 			frame_skip=args.frame_skip,
 			max_frames=(None if args.max_frames <= 0 else args.max_frames),
@@ -358,9 +371,6 @@ def evaluate_video_dir_with_glomap(args: argparse.Namespace) -> Dict[str, Any]:
 			random_seed=args.trajectory_random_seed,
 			enable_retry=not args.disable_trajectory_retry,
 			min_reconstruction_ratio=args.trajectory_min_reconstruction_ratio,
-			flowmap_repo_dir=args.flowmap_repo_dir,
-			flowmap_max_steps=args.flowmap_max_steps,
-			flowmap_checkpoint=args.flowmap_checkpoint,
 			verbose=args.verbose,
 		)
 
@@ -448,12 +458,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
 	)
 	parser.add_argument("--generated_video_root", type=str, default="/mnt/hdd/dataset/webvid10m/outputs")
 	parser.add_argument("--video_id", type=str, default="video_2", help="Video folder name under generated_video_root, e.g. video_0")
-	parser.add_argument("--save_root", type=str, default="evaluation/trajectory_test", help="Root directory to save trajectory outputs and metric report")
-	parser.add_argument("--gt_camera_json", type=str, default="example_test_data/cameras/camera_extrinsics.json")
+	parser.add_argument("--save_root", type=str, default="results/evaluation/trajectory_test", help="Root directory to save trajectory outputs and metric report")
+	parser.add_argument("--gt_camera_json", type=str, default="evaluation/camera_extrinsics.json")
 
 	# Trajectory extraction options.
 	# Keep the same CLI argument name/schema, but default to glomap pipeline.
-	parser.add_argument("--trajectory_backend", type=str, default="glomap", choices=["glomap", "colmap", "pycolmap", "flowmap"])
+	parser.add_argument("--trajectory_backend", type=str, default="glomap", choices=["glomap"])
 	parser.add_argument("--camera_model", type=str, default="PINHOLE")
 	parser.add_argument("--frame_skip", type=int, default=4)
 	parser.add_argument("--max_frames", type=int, default=81, help="<=0 means no frame limit")
@@ -465,9 +475,6 @@ def _build_cli_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--disable_trajectory_retry", action="store_true", help="Disable fallback attempts when initial reconstruction is weak")
 	parser.add_argument("--trajectory_min_reconstruction_ratio", type=float, default=0.2, help="Target minimum reconstructed frame ratio before stopping retries")
 	parser.add_argument("--disable_global_mapper", action="store_true", help="Compatibility flag; ignored when trajectory_backend is glomap/colmap")
-	parser.add_argument("--flowmap_repo_dir", type=str, default="", help="Path to local FlowMap repository when trajectory_backend=flowmap")
-	parser.add_argument("--flowmap_max_steps", type=int, default=500, help="FlowMap optimization steps when trajectory_backend=flowmap")
-	parser.add_argument("--flowmap_checkpoint", type=str, default="", help="Optional FlowMap checkpoint path, default null")
 	parser.add_argument("--verbose", action="store_true")
 	return parser
 

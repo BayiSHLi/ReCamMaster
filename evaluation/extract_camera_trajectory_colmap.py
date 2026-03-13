@@ -9,20 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
-try:
-    from evaluation.extract_camera_trajectory_common import (
-        as_bool,
-        build_ok_result_from_colmap_entities,
-        extract_frames_from_video,
-        save_camera_trajectory_json,
-    )
-except ModuleNotFoundError:
-    from extract_camera_trajectory_common import (
-        as_bool,
-        build_ok_result_from_colmap_entities,
-        extract_frames_from_video,
-        save_camera_trajectory_json,
-    )
+from utils.extract_camera_utils import (
+    as_bool,
+    build_ok_result_from_colmap_entities,
+    extract_frames_from_video,
+    save_camera_trajectory_json,
+)
 
 
 @dataclass

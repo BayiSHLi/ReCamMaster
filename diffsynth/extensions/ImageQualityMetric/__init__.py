@@ -133,11 +133,34 @@ model_dict = {
 }
 
 
+def _resolve_load_paths(metadata: dict, cache_dir: str) -> dict:
+    return {
+        key: os.path.join(cache_dir, metadata["model_id"], rel_path)
+        for key, rel_path in metadata["load_path"].items()
+    }
+
+
+def _paths_ready(paths: dict) -> bool:
+    # Some entries are files, others are model directories; existence check is sufficient.
+    return all(os.path.exists(path) for path in paths.values())
+
+
 def download_preference_model(model_name: preference_model_id, cache_dir="models"):
     metadata = model_dict[model_name]
-    snapshot_download(model_id=metadata["model_id"], allow_file_pattern=metadata["allow_file_pattern"], cache_dir=cache_dir)
-    load_path = metadata["load_path"]
-    load_path = {key: os.path.join(cache_dir, metadata["model_id"], path) for key, path in load_path.items()}
+    load_path = _resolve_load_paths(metadata, cache_dir)
+
+    # Avoid network calls when required assets already exist locally.
+    if _paths_ready(load_path):
+        return load_path
+
+    snapshot_download(
+        model_id=metadata["model_id"],
+        allow_file_pattern=metadata["allow_file_pattern"],
+        cache_dir=cache_dir,
+    )
+
+    # Always return resolved local paths; callers can decide how to handle missing files.
+    load_path = _resolve_load_paths(metadata, cache_dir)
     return load_path
 
 
