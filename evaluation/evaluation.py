@@ -106,6 +106,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--fvd_resize_short", type=int, default=256)
     parser.add_argument("--fvd_clip_len", type=int, default=16)
     parser.add_argument("--fvd_clip_stride", type=int, default=8)
+    parser.add_argument("--fvd_view_clip_len", type=int, default=8)
+    parser.add_argument("--fvd_device", type=str, default="cuda")
+    parser.add_argument("--fvd_frame_batch_size", type=int, default=16)
+    parser.add_argument("--fvd_video_batch_size", type=int, default=4)
 
     parser.add_argument("--vbench_enable_diffsynth_image_metrics", action="store_true", help="Enable diffsynth-backed Aesthetic/Imaging quality subset")
     parser.add_argument("--vbench_frame_stride", type=int, default=8)
@@ -315,6 +319,10 @@ def _build_pair_metric_config(args: argparse.Namespace, source_video: Path, gene
         "fvd_resize_short": args.fvd_resize_short,
         "fvd_clip_len": args.fvd_clip_len,
         "fvd_clip_stride": args.fvd_clip_stride,
+        "fvd_view_clip_len": args.fvd_view_clip_len,
+        "fvd_device": args.fvd_device,
+        "fvd_frame_batch_size": args.fvd_frame_batch_size,
+        "fvd_video_batch_size": args.fvd_video_batch_size,
         "vbench_enable_diffsynth_image_metrics": args.vbench_enable_diffsynth_image_metrics,
         "vbench_frame_stride": args.vbench_frame_stride,
         "vbench_max_frames": args.vbench_max_frames,
