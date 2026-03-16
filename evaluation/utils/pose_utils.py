@@ -114,12 +114,33 @@ def rescale_translation_with_first_gap(gt_relative_poses, pred_relative_poses):
     if gt_relative_poses.shape[0] < 2 or pred_relative_poses.shape[0] < 2:
         raise ValueError("Need at least 2 frames to estimate CameraCtrl translation scale")
 
+    # CameraCtrl D.5 uses the translation gap between the first two frames.
     gt_gap = np.linalg.norm(gt_relative_poses[1, :3, 3] - gt_relative_poses[0, :3, 3])
     pred_gap = np.linalg.norm(pred_relative_poses[1, :3, 3] - pred_relative_poses[0, :3, 3])
-    if pred_gap <= 1e-12:
-        raise ValueError("Predicted translation gap between first two frames is near zero")
+
+    # Engineering robustness: guard degenerate first-gap estimates before rescaling.
+    gap_epsilon = 1e-6
+    min_scale = 1e-3
+    max_scale = 1e3
+
+    if gt_gap <= gap_epsilon:
+        raise ValueError(
+            "CameraCtrl first-gap scale is unreliable: GT first-two-frame translation gap is near zero"
+        )
+    if pred_gap <= gap_epsilon:
+        raise ValueError(
+            "CameraCtrl first-gap scale is unreliable: predicted first-two-frame translation gap is near zero"
+        )
 
     scale = gt_gap / pred_gap
+    if not np.isfinite(scale):
+        raise ValueError("CameraCtrl first-gap scale is not finite")
+    if scale < min_scale or scale > max_scale:
+        raise ValueError(
+            "CameraCtrl first-gap scale is unreliable: "
+            f"scale={scale:.6g} outside safe range [{min_scale}, {max_scale}]"
+        )
+
     scaled_pred = pred_relative_poses.copy()
     scaled_pred[:, :3, 3] *= scale
     return scaled_pred

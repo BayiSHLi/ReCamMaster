@@ -20,6 +20,18 @@ _ROW_PATTERN = re.compile(r"\[([^\]]+)\]")
 _CAM_VIDEO_PATTERN = "cam[0-9][0-9].mp4"
 
 
+def _is_scale_degenerate_metric_error(message: str) -> bool:
+    msg = str(message).lower()
+    keywords = [
+        "first-gap",
+        "first-two-frame",
+        "translation gap is near zero",
+        "outside safe range",
+        "not finite",
+    ]
+    return any(token in msg for token in keywords)
+
+
 def _resolve_gt_camera_json_path(path_value: str) -> Path:
     raw = Path(path_value)
     eval_dir = Path(__file__).resolve().parent
@@ -164,6 +176,12 @@ def evaluate_camera_metric(
 
     gt_relative = to_relative_poses(gt_poses)
     pred_relative = to_relative_poses(pred_poses)
+
+    # Diagnostics are computed from the same first-two-frame rule as CameraCtrl D.5.
+    gt_first_gap = float(np.linalg.norm(gt_relative[1, :3, 3] - gt_relative[0, :3, 3])) if length >= 2 else 0.0
+    pred_first_gap = float(np.linalg.norm(pred_relative[1, :3, 3] - pred_relative[0, :3, 3])) if length >= 2 else 0.0
+    first_gap_scale = (gt_first_gap / pred_first_gap) if pred_first_gap > 0 else float("inf")
+
     pred_relative = rescale_translation_with_first_gap(gt_relative, pred_relative)
 
     paper = evaluate_camera_sequence_cameractrl_paper(gt_relative, pred_relative)
@@ -174,6 +192,10 @@ def evaluate_camera_metric(
         "metric_convention": "cameractrl_cami2v_paper",
         "RotErr_unit": "radian_sum",
         "TransErr_unit": "l2_sum",
+        "scale_alignment": "first_two_frame_translation_gap_ratio",
+        "first_gap_gt": float(gt_first_gap),
+        "first_gap_pred": float(pred_first_gap),
+        "first_gap_scale": float(first_gap_scale),
     }
 
 
@@ -290,8 +312,6 @@ def _build_aligned_eval_camera_json_pair(
 
     stats = {
         "aligned_pairs": len(matched_items),
-        "sampled_frame_indices": [item[0] for item in matched_items],
-        "gt_frame_indices": [item[1] for item in matched_items],
     }
     return gt_output_json, pred_output_json, stats
 
@@ -401,8 +421,14 @@ def evaluate_video_dir_with_glomap(args: argparse.Namespace) -> Dict[str, Any]:
                 camera_key=gt_camera_key,
             )
         except Exception as exc:  # noqa: BLE001
-            entry["metric_status"] = "failed"
-            entry["metric_reason"] = str(exc)
+            reason = str(exc)
+            if _is_scale_degenerate_metric_error(reason):
+                # CameraCtrl D.5 explicitly filters unreliable COLMAP-based trajectories.
+                entry["metric_status"] = "skipped"
+                entry["metric_reason"] = f"unreliable first-gap scale: {reason}"
+            else:
+                entry["metric_status"] = "failed"
+                entry["metric_reason"] = reason
             entry["metrics"] = {}
             results.append(entry)
             continue
@@ -412,8 +438,6 @@ def evaluate_video_dir_with_glomap(args: argparse.Namespace) -> Dict[str, Any]:
         entry["gt_eval_camera_json"] = str(gt_eval_json)
         entry["pred_eval_camera_json"] = str(pred_eval_json)
         entry["aligned_pairs"] = alignment_stats["aligned_pairs"]
-        entry["sampled_frame_indices"] = alignment_stats["sampled_frame_indices"]
-        entry["gt_frame_indices"] = alignment_stats["gt_frame_indices"]
         entry["metrics"] = metrics
         results.append(entry)
 
