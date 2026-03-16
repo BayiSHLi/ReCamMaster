@@ -2,13 +2,15 @@
 
 This directory provides a unified evaluation pipeline for ReCamMaster outputs.
 
+Camera evaluation is now fixed to the GLOMAP-based pipeline (no backend switch).
+
 ## 1. Core Pipeline
 
 The full evaluation workflow is integrated in `evaluation/evaluation.py`, and a single command automatically completes steps 1-5:
 
 1. (Optional) Run `evaluation/inference_webvid.py` to generate multi-camera videos (skipped when `--skip_generation` is set).
 2. Scan all `<video_id>/camXX.mp4` folders under `save_dir`.
-3. Run `evaluation/eval_camera.py` (GLOMAP/COLMAP trajectory extraction) to compute camera metrics (RotErr/TransErr).
+3. Run `evaluation/eval_camera.py` (fixed GLOMAP/COLMAP trajectory extraction) to compute paper-comparable camera metrics (RotErr/TransErr).
 4. Run pair-wise metrics for each camera video:
   - `evaluation/eval_matching.py` -> Mat.Pix
   - `evaluation/eval_clip.py` -> CLIP-V / CLIP-T / CLIP-F
@@ -91,9 +93,15 @@ Main script: `evaluation/evaluation.py`
   - `--data_root`: Dataset root (contains `videos/` and metadata CSV, default `0000.csv`).
   - `--save_dir`: Generation output directory; defaults to `<data_root>/outputs` when empty.
   - `--skip_generation`: Skip generation and evaluate existing outputs only.
+    - When `--skip_generation` is used,
+      the pipeline checks all `<video_id>` folders under `save_dir` (or `<data_root>/outputs`)
+      and requires complete non-empty `cam01.mp4` ... `cam10.mp4` files.
+      The run fails fast if incomplete folders are found.
   - `--selected_metrics`: Comma-separated metrics to run, from `camera,matching,clip,fvd,vbench`.
   - `--gt_camera_json`: GT camera extrinsics JSON (default `evaluation/camera_extrinsics.json`).
   - `--trajectory_save_root`: Root directory for evaluation outputs (per-video structure, default `results/evaluation`).
+  - `--skip_camera_extraction`: Reuse saved trajectory files under `<trajectory_save_root>/<video_id>/camera/<video_id>_glomap/camXX/camera_trajectory.json` and skip GLOMAP/COLMAP extraction.
+  - `--eval_show_progress` / `--no-eval_show_progress`: Enable/disable evaluation progress bars (default enabled).
   - `--max_eval_videos`: Maximum number of `<video_id>` folders to evaluate (`-1` means all).
   - `--camera_glob`: Camera-video matching pattern in each video folder (default `cam[0-9][0-9].mp4`).
   - `--output_json`: Final aggregated report path.
@@ -122,6 +130,19 @@ python evaluation/evaluation.py \
   --selected_metrics camera,matching,clip,fvd,vbench \
   --trajectory_save_root results/evaluation \
   --output_json results/evaluation/pipeline_results_skip_generation.json
+```
+
+Skip camera extraction for faster metric-only debugging (reuse saved trajectories):
+
+```bash
+python evaluation/evaluation.py \
+  --skip_generation \
+  --selected_metrics camera \
+  --skip_camera_extraction \
+  --data_root /mnt/hdd/dataset/webvid \
+  --save_dir /mnt/hdd/dataset/webvid/outputs \
+  --trajectory_save_root results/evaluation \
+  --output_json results/evaluation/pipeline_results_camera_skip_extract.json
 ```
 
 Smoke test (quick validation on one video):
@@ -175,6 +196,10 @@ With `--skip_generation`
   - `models/DiffSynth-Studio/QualityMetric_reward_pretrained/CLIP-ViT-H-14-laion2B-s32B-b79K/open_clip_pytorch_model.bin`
   - `models/DiffSynth-Studio/QualityMetric_reward_pretrained/bpe_simple_vocab_16e6.txt.gz`
 - Recommended environment: `py310`.
+- Camera metric convention in simplified `eval_camera.py`:
+  - `camera.RotErr`: radian sum over frames
+  - `camera.TransErr`: L2 translation error sum over frames
+- `evaluation/eval_camera_complete.py` keeps the archived full/diagnostic implementation.
 
 
 ## 9. Camera Trajectory Visualization

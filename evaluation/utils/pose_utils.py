@@ -46,6 +46,47 @@ def evaluate_camera_sequence(gt_poses, pred_poses):
         "frame_TransErr": np.array(trans_errors)
     }
 
+
+def evaluate_camera_sequence_cameractrl_paper(gt_poses, pred_poses):
+    """
+    CameraCtrl/CamI2V-compatible metric aggregation.
+
+    RotErr: per-frame rotation error in radians, summed across frames.
+    TransErr: per-frame L2 translation error, summed across frames.
+    """
+    gt_poses = np.asarray(gt_poses, dtype=np.float64)
+    pred_poses = np.asarray(pred_poses, dtype=np.float64)
+    if gt_poses.shape != pred_poses.shape:
+        raise ValueError(f"gt/pred shape mismatch: {gt_poses.shape} vs {pred_poses.shape}")
+    if gt_poses.ndim != 3 or gt_poses.shape[1:] != (4, 4):
+        raise ValueError(f"poses must be (T,4,4), got {gt_poses.shape}")
+
+    T = gt_poses.shape[0]
+    rot_errors_rad = []
+    trans_errors = []
+
+    for t in range(T):
+        R_gt = gt_poses[t][:3, :3]
+        t_gt = gt_poses[t][:3, 3]
+
+        R_pred = pred_poses[t][:3, :3]
+        t_pred = pred_poses[t][:3, 3]
+
+        # Same angular definition as CameraCtrl/CamI2V: arccos((tr(R_gt^T R_pred)-1)/2).
+        cos_theta = np.clip((np.trace(R_gt.T @ R_pred) - 1.0) / 2.0, -1.0, 1.0)
+        rot_errors_rad.append(float(np.arccos(cos_theta)))
+        trans_errors.append(float(np.linalg.norm(t_gt - t_pred)))
+
+    rot_errors_rad = np.asarray(rot_errors_rad, dtype=np.float64)
+    trans_errors = np.asarray(trans_errors, dtype=np.float64)
+    return {
+        "RotErr_rad_sum": float(np.sum(rot_errors_rad)),
+        "TransErr_sum": float(np.sum(trans_errors)),
+        "frame_RotErr_rad": rot_errors_rad,
+        "frame_TransErr": trans_errors,
+        "num_frames": int(T),
+    }
+
 def to_relative_poses(poses):
     """
     Convert absolute c2w poses to relative poses by setting frame 0 to identity.
